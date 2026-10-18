@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 
 import type { ApiError } from "@/lib/api/fetcher";
@@ -20,6 +20,9 @@ const FILTERS = [
   { value: "archived", label: "已归档" },
 ] as const;
 
+/** 每页条数；服务端上限 50（agent.md §5）。 */
+const PAGE_SIZE = 20;
+
 /**
  * 管理端文章列表（D5）。
  *
@@ -27,11 +30,27 @@ const FILTERS = [
  */
 export function PostList() {
   const [status, setStatus] = useState<string>("");
+  const [page, setPage] = useState(1);
 
   const { data, error, isLoading } = useSWR<PostListResult, ApiError>(
-    swrKeys.adminPosts(status),
-    () => adminPostApi.list({ status, pageSize: 50 }),
+    swrKeys.adminPosts(status, page, PAGE_SIZE),
+    () => adminPostApi.list({ status, page, pageSize: PAGE_SIZE }),
   );
+
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // 删除或切换筛选后当前页可能越界，退回到最后一页。
+  useEffect(() => {
+    if (data && page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [data, page, totalPages]);
+
+  function changeStatus(next: string) {
+    setStatus(next);
+    setPage(1);
+  }
 
   return (
     <section className="space-y-6">
@@ -39,7 +58,7 @@ export function PostList() {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">文章</h1>
           <p className="text-sm text-muted-foreground">
-            共 {data?.total ?? 0} 篇；草稿不会出现在公开站。
+            共 {total} 篇；草稿不会出现在公开站。
           </p>
         </div>
         <Button asChild>
@@ -54,7 +73,7 @@ export function PostList() {
             size="sm"
             variant={status === filter.value ? "default" : "outline"}
             aria-pressed={status === filter.value}
-            onClick={() => setStatus(filter.value)}
+            onClick={() => changeStatus(filter.value)}
           >
             {filter.label}
           </Button>
@@ -72,7 +91,7 @@ export function PostList() {
       {data ? (
         data.list.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">
-            还没有文章，先写一篇吧。
+            这一页还没有文章。
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-border">
@@ -131,6 +150,40 @@ export function PostList() {
             </table>
           </div>
         )
+      ) : null}
+
+      {data ? (
+        <nav
+          aria-label="分页"
+          className="flex flex-wrap items-center justify-between gap-4 text-sm text-muted-foreground"
+        >
+          <span>
+            共 {total} 篇，第 {page} / {totalPages} 页
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page <= 1}
+            >
+              上一页
+            </Button>
+            <span aria-live="polite" className="px-1">
+              {page} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={page >= totalPages}
+            >
+              下一页
+            </Button>
+          </div>
+        </nav>
       ) : null}
     </section>
   );
