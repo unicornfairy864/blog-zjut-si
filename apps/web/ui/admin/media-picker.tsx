@@ -43,10 +43,19 @@ export function MediaPicker({
     );
   }
 
+  const ready = data.list.filter((item) => item.status === "ready");
+  if (ready.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        图片还在转码，稍等片刻再打开这里。
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-2">
       <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-        {data.list.map((item) => {
+        {ready.map((item) => {
           const name = item.alt || item.originalName || "图片";
           return (
             <li key={item.id}>

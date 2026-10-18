@@ -123,12 +123,20 @@
 {
   "id": 1, "sha256": "786a8d…", "originalName": "photo.jpg", "mime": "image/jpeg", "ext": "jpg",
   "bytes": 177841, "width": 2400, "height": 1200, "pixels": 2880000,
-  "alt": "示例图", "status": "ready", "error": "",
+  "alt": "示例图", "blurhash": "L6Pj0^…", "status": "ready", "error": "",
   "url": "/uploads/78/786a8d…/1600.webp",
-  "variants": { "1600": "/uploads/78/786a8d…/1600.webp" },
+  "variants": {
+    "480": "/uploads/78/786a8d…/480.webp",
+    "960": "/uploads/78/786a8d…/960.webp",
+    "1600": "/uploads/78/786a8d…/1600.webp",
+    "2400": "/uploads/78/786a8d…/2400.webp"
+  },
   "createdAt": 1760000000, "updatedAt": 1760000000
 }
 ```
+
+上传立即返回 `status: "processing"`，后台任务生成四档 WebP 与 blurhash 后变 `ready`；
+客户端轮询 `GET /api/admin/media` 即可。`failed` 时 `error` 有原因、可 `retry`。
 
 `img_base_url` 为空时 URL 是相对路径 `/uploads/…`（公开站由 nginx 直出；
 管理端 8641 直出 `/uploads/*` 供媒体库与编辑器预览）。

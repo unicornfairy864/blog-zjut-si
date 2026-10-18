@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
+	github.com/buckket/go-blurhash v1.1.0
 	github.com/gen2brain/webp v0.5.5
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
@@ -12,6 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/spf13/viper v1.21.0
+	github.com/studio-b12/gowebdav v0.13.0
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.47.0

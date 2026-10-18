@@ -7,20 +7,23 @@ package imaging
 import (
 	"fmt"
 	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"math"
 
 	"github.com/gen2brain/webp"
 	xdraw "golang.org/x/image/draw"
-
-	// 注册 JPEG / PNG / GIF 解码器；WebP 由 gen2brain/webp 的 init 注册。
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 )
 
 // WebPQuality 是变体的编码质量（§10：q82）。
 const WebPQuality = 82
+
+// OriginalJPEGQuality 是摆正后原图的 JPEG 质量。
+//
+// 原图必须重新编码才能剥离 EXIF（§9）；q92 在画质与体积之间取平衡。
+const OriginalJPEGQuality = 92
 
 // Config 是探测到的图片元信息，不需要解码像素。
 type Config struct {
@@ -72,4 +75,22 @@ func ResizeToWidth(img image.Image, width int) image.Image {
 // EncodeWebP 按固定质量编码 WebP。
 func EncodeWebP(w io.Writer, img image.Image) error {
 	return webp.Encode(w, img, webp.Options{Quality: WebPQuality})
+}
+
+// EncodeOriginal 按上传时的格式重新编码（摆正后调用，EXIF 随编码丢失）。
+//
+// GIF 只保留首帧；本站不承诺动图。
+func EncodeOriginal(w io.Writer, format string, img image.Image) error {
+	switch format {
+	case "jpeg":
+		return jpeg.Encode(w, img, &jpeg.Options{Quality: OriginalJPEGQuality})
+	case "png":
+		return png.Encode(w, img)
+	case "gif":
+		return gif.Encode(w, img, nil)
+	case "webp":
+		return webp.Encode(w, img, webp.Options{Quality: 90})
+	default:
+		return fmt.Errorf("不支持重新编码的图片格式 %q", format)
+	}
 }

@@ -16,7 +16,9 @@ import (
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/core/edge"
 	corelog "github.com/unicornfairy864/blog-zjut-si/apps/server/core/log"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/global"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/model"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/router"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/service"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/task"
 )
 
@@ -65,7 +67,11 @@ func Run() {
 	group, groupCtx := errgroup.WithContext(ctx)
 
 	group.Go(func() error {
-		return task.NewScheduler(global.Config.Task).Start(groupCtx)
+		handlers := map[string]task.Handler{
+			model.JobTypeMediaProcess: service.ServiceGroupApp.Media.HandleProcess,
+			model.JobTypeMediaArchive: service.ServiceGroupApp.Media.HandleArchive,
+		}
+		return task.NewScheduler(global.Config.Task, handlers).Start(groupCtx)
 	})
 
 	group.Go(func() error {

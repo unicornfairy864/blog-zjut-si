@@ -49,3 +49,15 @@ upload:
 task:
   enabled: true
   interval_seconds: 60
+
+cloudreve:
+  # 原图归档（agent.md §10）；关闭时上传、变体与媒体库照常工作。
+  enabled: false
+  # Cloudreve 的 WebDAV 地址，形如 https://pan.example.com/dav。
+  webdav_url: ""
+  username: ""
+  # 口令只走环境变量 BLOG_CLOUDREVE_PASSWORD，不写在这里。
+  password: ""
+  # 远端目录；容器会把原图写成 {base_path}/{sha256}.{ext}。
+  base_path: "/blog"
+  timeout_seconds: 30

@@ -47,7 +47,11 @@ export function MediaLibrary() {
     ApiError
   >(swrKeys.adminMedia(page, PAGE_SIZE), () =>
     adminMediaApi.list({ page, pageSize: PAGE_SIZE }),
-  );
+  {
+    // 有图片仍在处理时轮询，ready/failed 后自动停下。
+    refreshInterval: (latest: MediaListResult | undefined) =>
+      latest?.list.some((item) => item.status === "processing") ? 2_000 : 0,
+  });
 
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -174,12 +178,20 @@ export function MediaLibrary() {
                   className="overflow-hidden rounded-lg border border-border bg-card"
                 >
                   <div className="flex aspect-[4/3] items-center justify-center bg-muted">
-                    <img
-                      src={item.url}
-                      alt={name}
-                      loading="lazy"
-                      className="h-full w-full object-contain"
-                    />
+                    {item.status === "ready" ? (
+                      <img
+                        src={item.url}
+                        alt={name}
+                        loading="lazy"
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <span className="px-3 text-center text-xs text-muted-foreground">
+                        {item.status === "failed"
+                          ? `处理失败：${item.error || "未知原因"}`
+                          : "处理中…"}
+                      </span>
+                    )}
                   </div>
                   <div className="space-y-2 p-3">
                     <p className="truncate text-sm font-medium" title={item.originalName}>
@@ -187,7 +199,6 @@ export function MediaLibrary() {
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {item.width}×{item.height} · {formatBytes(item.bytes)}
-                      {item.status !== "ready" ? ` · ${item.status}` : ""}
                     </p>
                     <div className="flex flex-wrap gap-1">
                       <Button
@@ -204,7 +215,7 @@ export function MediaLibrary() {
                       >
                         复制链接
                       </Button>
-                      {item.status !== "ready" ? (
+                      {item.status === "failed" ? (
                         <Button
                           size="sm"
                           variant="outline"

@@ -135,6 +135,10 @@ docker compose start blog
 | `BLOG_AUTH_COOKIE_SECURE` | `false` | 隧道走 http，保持 false |
 | `BLOG_LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 | `BLOG_TASK_ENABLED` | `true` | 调度器开关 |
+| `BLOG_CLOUDREVE_ENABLED` | `false` | 是否启用原图归档 |
+| `BLOG_CLOUDREVE_WEBDAV_URL` | 空 | Cloudreve WebDAV 地址（如 `https://pan.example.com/dav`） |
+| `BLOG_CLOUDREVE_USERNAME` / `BLOG_CLOUDREVE_PASSWORD` | 空 | WebDAV 账号；口令含 `$` 时在 `.env` 写成 `$$` |
+| `BLOG_CLOUDREVE_BASE_PATH` | `/blog` | 远端目录，原图写成 `{base}/{sha256}.{ext}` |
 | `BLOG_CONFIG` | 空 | 显式指定配置文件 |
 | `BLOG_MIGRATE_ONLY` | 空 | 设为 `1` 时只迁移后退出 |
 | `BLOG_ADMIN_USERNAME` / `BLOG_ADMIN_PASSWORD` | 空 | 首次引导创建管理员 |
@@ -170,3 +174,66 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d blog.zjut.si        # 首次
 sudo certbot renew --dry-run                # 每月演练
 ```
+
+## 11. 图床：Cloudreve WebDAV 归档（D8）
+
+本站的图片**不在图床上直接对外提供**：公开站由 nginx 直出本机 `/data/blog/uploads`，
+Cloudreve 只保存**原图归档**（§10），用于 30 天后清理本地原图、以及原图长期留存。
+
+### 11.1 Cloudreve 侧
+
+1. 在 Cloudreve 里新建目录 `/blog`（与 `BLOG_CLOUDREVE_BASE_PATH` 对应）。
+2. 右上角头像 → **WebDAV 账号**，新建一个账号：
+   - 目录权限只勾 `/blog`，不要给整盘；
+   - 记下 WebDAV 用户名与密码。
+3. WebDAV 地址通常是 `https://<你的域名>/dav`（Cloudreve v3/v4 默认路径）。
+   先手工验证一次：
+   ```bash
+   curl -u '用户名:口令' -X PROPFIND https://pan.example.com/dav/blog -H 'Depth: 0'
+   ```
+   返回 `207 Multi-Status` 即通；`401` 是账号或路径权限不对。
+
+### 11.2 博客侧
+
+编辑 `deploy/.env`：
+
+```dotenv
+BLOG_CLOUDREVE_ENABLED=true
+BLOG_CLOUDREVE_WEBDAV_URL=https://pan.example.com/dav
+BLOG_CLOUDREVE_USERNAME=blog-archive
+BLOG_CLOUDREVE_PASSWORD=your-password
+BLOG_CLOUDREVE_BASE_PATH=/blog
+```
+
+口令包含 `$` 时必须写成 `$$`（compose 会先做变量插值）。改完：
+
+```bash
+cd /srv/blog/deploy
+docker compose up -d          # 只改 env，不需要 --build
+docker compose logs --tail=50 blog
+```
+
+### 11.3 验证归档
+
+1. 媒体库上传一张图，等状态从「处理中」变成可预览。
+2. 查看任务：
+   ```bash
+   docker compose exec blog sh -c 'true'   # 容器内没有 sqlite3，任务状态用 API 或日志看
+   docker compose logs --tail=100 blog | grep media_archive
+   ```
+3. Cloudreve 的 `/blog` 下应出现 `{sha256}.jpg`（或原扩展名）。
+4. 本地原图仍在（30 天保留期，`cleanup` 在 D14 接入）：
+   ```bash
+   ls -l /data/blog/uploads/*/*/original.*
+   ```
+
+归档失败时任务会按 1m / 5m / 15m 退避重试 3 次，之后 `jobs.status=failed`；
+日志里搜 `任务失败`，常见原因是 WebDAV 地址少了 `/dav`、账号没给 `/blog` 写权限、
+或口令里的 `$` 没转义。
+
+### 11.4 不启用会怎样
+
+`BLOG_CLOUDREVE_ENABLED=false` 时上传、四档变体、媒体库全部照常工作，只是不推原图。
+之后想补归档：把开关打开并重建容器，然后在媒体库对每张图点「重试」即可重新投递任务
+（重试会重新生成变体并投递归档）。
+

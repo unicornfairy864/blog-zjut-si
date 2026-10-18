@@ -12,6 +12,7 @@ export interface MediaItem {
   height: number;
   pixels: number;
   alt: string;
+  blurhash: string;
   status: string;
   error: string;
   url: string;

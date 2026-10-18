@@ -18,13 +18,14 @@ import (
 
 // Config 是进程的全部配置。
 type Config struct {
-	Server ServerConfig `mapstructure:"server"`
-	Web    WebConfig    `mapstructure:"web"`
-	DB     DBConfig     `mapstructure:"db"`
-	Log    LogConfig    `mapstructure:"log"`
-	Auth   AuthConfig   `mapstructure:"auth"`
-	Upload UploadConfig `mapstructure:"upload"`
-	Task   TaskConfig   `mapstructure:"task"`
+	Server    ServerConfig    `mapstructure:"server"`
+	Web       WebConfig       `mapstructure:"web"`
+	DB        DBConfig        `mapstructure:"db"`
+	Log       LogConfig       `mapstructure:"log"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Upload    UploadConfig    `mapstructure:"upload"`
+	Task      TaskConfig      `mapstructure:"task"`
+	Cloudreve CloudreveConfig `mapstructure:"cloudreve"`
 }
 
 // ServerConfig 描述两条 listener 的监听与超时参数。
@@ -77,6 +78,26 @@ type UploadConfig struct {
 type TaskConfig struct {
 	Enabled         bool `mapstructure:"enabled"`
 	IntervalSeconds int  `mapstructure:"interval_seconds"`
+}
+
+// CloudreveConfig 描述原图归档的 WebDAV 目标（§10：原图推 Cloudreve）。
+//
+// 口令只走环境变量 BLOG_CLOUDREVE_PASSWORD，不写入 config.yaml。
+type CloudreveConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	WebDAVURL      string `mapstructure:"webdav_url"`
+	Username       string `mapstructure:"username"`
+	Password       string `mapstructure:"password"`
+	BasePath       string `mapstructure:"base_path"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+}
+
+// Timeout 返回 WebDAV 请求超时。
+func (c CloudreveConfig) Timeout() time.Duration {
+	if c.TimeoutSeconds <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
 // ReadHeaderTimeout 返回读请求头的超时。
@@ -177,6 +198,13 @@ func applyDefaults(v *viper.Viper) {
 
 	v.SetDefault("task.enabled", true)
 	v.SetDefault("task.interval_seconds", 60)
+
+	v.SetDefault("cloudreve.enabled", false)
+	v.SetDefault("cloudreve.webdav_url", "")
+	v.SetDefault("cloudreve.username", "")
+	v.SetDefault("cloudreve.password", "")
+	v.SetDefault("cloudreve.base_path", "/blog")
+	v.SetDefault("cloudreve.timeout_seconds", 30)
 }
 
 // normalize 做无损归一化：去空白、创建目录。
@@ -188,6 +216,16 @@ func (c *Config) normalize() error {
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Auth.CookieName = strings.TrimSpace(c.Auth.CookieName)
 	c.Upload.Dir = strings.TrimSpace(c.Upload.Dir)
+	c.Cloudreve.WebDAVURL = strings.TrimRight(strings.TrimSpace(c.Cloudreve.WebDAVURL), "/")
+	c.Cloudreve.Username = strings.TrimSpace(c.Cloudreve.Username)
+	c.Cloudreve.BasePath = strings.TrimSpace(c.Cloudreve.BasePath)
+	if c.Cloudreve.BasePath == "" {
+		c.Cloudreve.BasePath = "/blog"
+	}
+	if !strings.HasPrefix(c.Cloudreve.BasePath, "/") {
+		c.Cloudreve.BasePath = "/" + c.Cloudreve.BasePath
+	}
+	c.Cloudreve.BasePath = strings.TrimRight(c.Cloudreve.BasePath, "/")
 
 	if c.Upload.Dir != "" {
 		if err := os.MkdirAll(c.Upload.Dir, 0o750); err != nil {
@@ -253,6 +291,17 @@ func (c Config) Validate() error {
 	}
 	if c.Task.IntervalSeconds < 10 {
 		problems = append(problems, "task.interval_seconds 必须 ≥10")
+	}
+	if c.Cloudreve.Enabled {
+		if c.Cloudreve.WebDAVURL == "" {
+			problems = append(problems, "cloudreve.webdav_url 在启用归档时不能为空")
+		}
+		if c.Cloudreve.Username == "" {
+			problems = append(problems, "cloudreve.username 在启用归档时不能为空")
+		}
+	}
+	if c.Cloudreve.TimeoutSeconds < 5 || c.Cloudreve.TimeoutSeconds > 300 {
+		problems = append(problems, "cloudreve.timeout_seconds 必须在 5–300 之间")
 	}
 
 	if len(problems) > 0 {
