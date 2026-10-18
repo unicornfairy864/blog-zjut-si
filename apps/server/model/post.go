@@ -2,6 +2,7 @@ package model
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -179,4 +180,166 @@ func SoftDeletePost(db *gorm.DB, id int64, at dbtime.Unix) error {
 // escapeLike 转义 LIKE 的通配符；配合 ESCAPE '\' 使用，避免用户输入把整表扫出来。
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// FindPostBySlug 按 slug 查询；withDeleted 为 true 时包含回收站记录（公开端用它返回 410）。
+func FindPostBySlug(db *gorm.DB, slug string, withDeleted bool) (*Post, error) {
+	query := db.Where("slug = ?", slug)
+	if !withDeleted {
+		query = query.Where("deleted_at IS NULL")
+	}
+	var post Post
+	if err := query.Take(&post).Error; err != nil {
+		return nil, wrapErr(err)
+	}
+	return &post, nil
+}
+
+// PublicPostFilter 是公开列表的筛选条件；标签与系列在 D9–D10 再扩展。
+type PublicPostFilter struct {
+	Limit  int
+	Offset int
+}
+
+// ListPublishedPosts 返回已发布文章：置顶优先，发布时间倒序（§11 草稿隔离）。
+func ListPublishedPosts(db *gorm.DB, f PublicPostFilter) ([]Post, int64, error) {
+	published := func() *gorm.DB {
+		return db.Model(&Post{}).Where("status = ? AND deleted_at IS NULL", PostStatusPublished)
+	}
+
+	var total int64
+	if err := published().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	posts := make([]Post, 0)
+	query := published().Order("is_pinned DESC, published_at DESC, id DESC")
+	if f.Limit > 0 {
+		query = query.Limit(f.Limit)
+	}
+	if f.Offset > 0 {
+		query = query.Offset(f.Offset)
+	}
+	if err := query.Find(&posts).Error; err != nil {
+		return nil, 0, err
+	}
+	return posts, total, nil
+}
+
+// SearchPublishedPosts 搜索已发布文章：≥3 字走 FTS5 trigram，1–2 字走 LIKE 兜底（§7.1 V1）。
+func SearchPublishedPosts(db *gorm.DB, keyword string, limit, offset int) ([]Post, int64, error) {
+	if utf8.RuneCountInString(keyword) >= 3 {
+		return searchPublishedFTS(db, keyword, limit, offset)
+	}
+	return searchPublishedLike(db, keyword, limit, offset)
+}
+
+// searchPublishedFTS 用 FTS5 的 bm25 排序；查询串整体加引号并转义内部双引号（§9）。
+func searchPublishedFTS(db *gorm.DB, keyword string, limit, offset int) ([]Post, int64, error) {
+	match := `"` + strings.ReplaceAll(keyword, `"`, `""`) + `"`
+
+	var total int64
+	row := db.Raw(`
+		SELECT count(*)
+		FROM posts_fts
+		JOIN posts ON posts.id = posts_fts.rowid
+		WHERE posts_fts MATCH ? AND posts.status = ? AND posts.deleted_at IS NULL`,
+		match, PostStatusPublished).Row()
+	if err := row.Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	posts := make([]Post, 0)
+	if err := db.Raw(`
+		SELECT posts.*
+		FROM posts_fts
+		JOIN posts ON posts.id = posts_fts.rowid
+		WHERE posts_fts MATCH ? AND posts.status = ? AND posts.deleted_at IS NULL
+		ORDER BY bm25(posts_fts), posts.published_at DESC
+		LIMIT ? OFFSET ?`,
+		match, PostStatusPublished, limit, offset).Scan(&posts).Error; err != nil {
+		return nil, 0, err
+	}
+	return posts, total, nil
+}
+
+// searchPublishedLike 覆盖 1–2 字关键词；trigram 分词无法索引这么短的串。
+func searchPublishedLike(db *gorm.DB, keyword string, limit, offset int) ([]Post, int64, error) {
+	like := "%" + escapeLike(keyword) + "%"
+	matching := func() *gorm.DB {
+		return db.Model(&Post{}).
+			Where("status = ? AND deleted_at IS NULL", PostStatusPublished).
+			Where(`(title LIKE ? ESCAPE '\' OR excerpt LIKE ? ESCAPE '\' OR content_text LIKE ? ESCAPE '\')`,
+				like, like, like)
+	}
+
+	var total int64
+	if err := matching().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	posts := make([]Post, 0)
+	query := matching().Order("is_pinned DESC, published_at DESC, id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if offset > 0 {
+		query = query.Offset(offset)
+	}
+	if err := query.Find(&posts).Error; err != nil {
+		return nil, 0, err
+	}
+	return posts, total, nil
+}
+
+// PublicPostListItem 是公开列表项；不包含正文（§12 列表与详情分离）。
+type PublicPostListItem struct {
+	ID           int64        `json:"id"`
+	Slug         string       `json:"slug"`
+	Title        string       `json:"title"`
+	Excerpt      string       `json:"excerpt"`
+	CoverMediaID *int64       `json:"coverMediaId"`
+	PublishedAt  *dbtime.Unix `json:"publishedAt"`
+	UpdatedAt    dbtime.Unix  `json:"updatedAt"`
+	WordCount    int          `json:"wordCount"`
+	ReadingTime  int          `json:"readingTime"`
+	IsPinned     bool         `json:"isPinned"`
+}
+
+// PublicListItem 把实体裁剪成公开列表项。
+func (p Post) PublicListItem() PublicPostListItem {
+	return PublicPostListItem{
+		ID:           p.ID,
+		Slug:         p.Slug,
+		Title:        p.Title,
+		Excerpt:      p.Excerpt,
+		CoverMediaID: p.CoverMediaID,
+		PublishedAt:  p.PublishedAt,
+		UpdatedAt:    p.UpdatedAt,
+		WordCount:    p.WordCount,
+		ReadingTime:  p.ReadingTime,
+		IsPinned:     p.IsPinned,
+	}
+}
+
+// PublicPostDetail 是公开文章详情；只出 HTML，不出 Markdown 源码。
+type PublicPostDetail struct {
+	PublicPostListItem
+	ContentHTML    string `json:"contentHtml"`
+	SEOTitle       string `json:"seoTitle"`
+	SEODescription string `json:"seoDescription"`
+	CanonicalURL   string `json:"canonicalUrl"`
+	Lang           string `json:"lang"`
+}
+
+// PublicDetail 把实体裁剪成公开详情。
+func (p Post) PublicDetail() PublicPostDetail {
+	return PublicPostDetail{
+		PublicPostListItem: p.PublicListItem(),
+		ContentHTML:        p.ContentHTML,
+		SEOTitle:           p.SEOTitle,
+		SEODescription:     p.SEODescription,
+		CanonicalURL:       p.CanonicalURL,
+		Lang:               p.Lang,
+	}
 }

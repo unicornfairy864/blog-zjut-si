@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { SITE } from "@/lib/constants/site";
 import "@/styles/globals.css";
 import "@/styles/prose.css";
+import "@/styles/chroma.css";
 
 /**
  * 全部路由按请求渲染：CSP 的 nonce 每请求都不同，静态 HTML 会和策略对不上

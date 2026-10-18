@@ -473,6 +473,41 @@ func (s PostService) Preview(contentMD, excerpt string) PostPreview {
 	}
 }
 
+// PublicList 返回已发布文章的一页；草稿、定时、归档与回收站一律不可见。
+func (s PostService) PublicList(page, pageSize int) ([]model.Post, int64, error) {
+	return model.ListPublishedPosts(global.DB, model.PublicPostFilter{
+		Limit:  pageSize,
+		Offset: (page - 1) * pageSize,
+	})
+}
+
+// PublicBySlug 返回公开文章详情：归档/已删除 → 410，草稿/定时 → 404（§11）。
+func (s PostService) PublicBySlug(slug string) (*model.Post, error) {
+	post, err := model.FindPostBySlug(global.DB, slug, true)
+	if err != nil {
+		if errors.Is(err, model.ErrNotFound) {
+			return nil, errs.New(errs.ErrorNotFound, "文章不存在")
+		}
+		return nil, fmt.Errorf("查询文章失败: %w", err)
+	}
+
+	switch {
+	case post.DeletedAt != nil:
+		return nil, errs.New(errs.ErrorGone, "文章已删除")
+	case post.Status == model.PostStatusArchived:
+		return nil, errs.New(errs.ErrorGone, "文章已归档")
+	case post.Status != model.PostStatusPublished:
+		// 草稿与定时文章不泄露存在性。
+		return nil, errs.New(errs.ErrorNotFound, "文章不存在")
+	}
+	return post, nil
+}
+
+// Search 公开搜索；关键词长度由 api 层校验。
+func (s PostService) Search(keyword string, page, pageSize int) ([]model.Post, int64, error) {
+	return model.SearchPublishedPosts(global.DB, keyword, pageSize, (page-1)*pageSize)
+}
+
 // Revisions 返回文章的版本列表（最多 50 条）。
 func (s PostService) Revisions(id int64) ([]model.PostRevision, error) {
 	if _, err := model.FindPostByID(global.DB, id, false); err != nil {

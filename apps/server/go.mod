@@ -3,6 +3,7 @@ module github.com/unicornfairy864/blog-zjut-si/apps/server
 go 1.26.0
 
 require (
+	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-playground/validator/v10 v10.30.5
@@ -23,6 +24,7 @@ require (
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect

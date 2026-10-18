@@ -4,6 +4,12 @@
 package response
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/errs"
@@ -44,6 +50,46 @@ func OkWithDetailed(c *gin.Context, data any, msg string) {
 // OkWithPage 返回分页成功响应。
 func OkWithPage(c *gin.Context, list any, total int64, page, pageSize int) {
 	OkWithData(c, Page{List: list, Total: total, Page: page, PageSize: pageSize})
+}
+
+// OkWithETag 输出带强 ETag 的公开读响应（agent.md §5 / §12）。
+//
+// ETag 取响应体哈希；命中 If-None-Match 时返回 304，不重复传输正文。
+func OkWithETag(c *gin.Context, data any) {
+	body, err := json.Marshal(Body{Code: errs.Success, Data: data, Msg: okMessage})
+	if err != nil {
+		FailWithDetailed(c, errs.ErrorInternal, nil, "服务器内部错误")
+		return
+	}
+
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+
+	c.Header("Cache-Control", "no-cache")
+	c.Header("ETag", etag)
+
+	if matchETag(c.GetHeader("If-None-Match"), etag) {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+}
+
+// matchETag 判断 If-None-Match 是否命中（支持逗号分隔列表与 *）。
+func matchETag(header, etag string) bool {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return false
+	}
+	if header == "*" {
+		return true
+	}
+	for _, candidate := range strings.Split(header, ",") {
+		if strings.TrimSpace(candidate) == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // FailWithDetailed 返回失败响应；HTTP 状态由 code 查表。

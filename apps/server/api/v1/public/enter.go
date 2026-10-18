@@ -3,6 +3,7 @@ package public
 
 // ApiGroup 聚合公开接口。
 type ApiGroup struct {
+	Post PostApi
 	SystemApi
 }
 

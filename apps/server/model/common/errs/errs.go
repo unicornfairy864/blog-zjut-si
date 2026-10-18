@@ -16,6 +16,7 @@ const (
 	ErrorConflict       = 1004
 	ErrorRateLimited    = 1005
 	ErrorInternal       = 1006
+	ErrorGone           = 1007
 	ErrorSlugConflict   = 2001
 	ErrorMediaInUse     = 2002
 	ErrorImageTooLarge  = 2003
@@ -35,6 +36,7 @@ var httpStatusByCode = map[int]int{
 	ErrorConflict:       409,
 	ErrorRateLimited:    429,
 	ErrorInternal:       500,
+	ErrorGone:           410,
 	ErrorSlugConflict:   409,
 	ErrorMediaInUse:     409,
 	ErrorImageTooLarge:  413,

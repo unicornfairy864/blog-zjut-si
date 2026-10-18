@@ -21,6 +21,11 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 	api.Use(middleware.RateLimit(middleware.NewPublicAPILimiter(), nil))
 	{
 		api.GET("/system/ping", v1.ApiGroupApp.Public.Ping)
+
+		// 公开文章与搜索（D6）：只读，全部带强 ETag（§5 / §12）。
+		api.GET("/posts", v1.ApiGroupApp.Public.Post.List)
+		api.GET("/posts/:slug", v1.ApiGroupApp.Public.Post.Detail)
+		api.GET("/search", v1.ApiGroupApp.Public.Post.Search)
 	}
 
 	engine.NoRoute(func(c *gin.Context) {
