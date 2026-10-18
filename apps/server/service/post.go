@@ -452,6 +452,27 @@ func (s PostService) Unpublish(id int64, actor PostActor) (*model.Post, error) {
 	return s.Get(updated.ID)
 }
 
+// PostPreview 是编辑器预览的产物；与发布时落库的渲染完全同源（§8）。
+type PostPreview struct {
+	HTML        string
+	Text        string
+	WordCount   int
+	ReadingTime int
+	Excerpt     string
+}
+
+// Preview 渲染尚未保存的 Markdown，不写库。
+func (s PostService) Preview(contentMD, excerpt string) PostPreview {
+	rendered := render.Markdown(contentMD)
+	return PostPreview{
+		HTML:        rendered.HTML,
+		Text:        rendered.Text,
+		WordCount:   rendered.WordCount,
+		ReadingTime: rendered.ReadingTime,
+		Excerpt:     excerptOrAuto(excerpt, rendered.Text),
+	}
+}
+
 // Revisions 返回文章的版本列表（最多 50 条）。
 func (s PostService) Revisions(id int64) ([]model.PostRevision, error) {
 	if _, err := model.FindPostByID(global.DB, id, false); err != nil {

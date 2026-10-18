@@ -30,6 +30,8 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			// 文章（D4）：草稿 CRUD + 状态机 + 版本快照。
 			authorized.GET("/posts", v1.ApiGroupApp.Admin.Post.List)
 			authorized.POST("/posts", v1.ApiGroupApp.Admin.Post.Create)
+			// 预览是不落库的渲染，放在 :id 之前注册以保持静态路由优先。
+			authorized.POST("/posts/preview", v1.ApiGroupApp.Admin.Post.Preview)
 			authorized.GET("/posts/:id", v1.ApiGroupApp.Admin.Post.Detail)
 			authorized.PUT("/posts/:id", v1.ApiGroupApp.Admin.Post.Replace)
 			authorized.PATCH("/posts/:id", v1.ApiGroupApp.Admin.Post.Update)

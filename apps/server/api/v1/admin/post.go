@@ -62,6 +62,12 @@ type postPublishRequest struct {
 	Note string `json:"note" binding:"max=200"`
 }
 
+// postPreviewRequest 是编辑器预览入参；不落库。
+type postPreviewRequest struct {
+	ContentMD string `json:"contentMd" binding:"max=2000000"`
+	Excerpt   string `json:"excerpt" binding:"max=300"`
+}
+
 // List 处理 GET /api/admin/posts。
 func (PostApi) List(c *gin.Context) {
 	var page request.PageInfo
@@ -82,6 +88,24 @@ func (PostApi) List(c *gin.Context) {
 		items = append(items, post.ListItem())
 	}
 	response.OkWithPage(c, items, total, page.Page, page.PageSize)
+}
+
+// Preview 处理 POST /api/admin/posts/preview：渲染未保存正文，结果与发布一致。
+func (PostApi) Preview(c *gin.Context) {
+	var req postPreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithDetailed(c, errs.ErrorValidation, request.ValidationDetails(err), "参数校验失败")
+		return
+	}
+
+	result := service.ServiceGroupApp.Post.Preview(req.ContentMD, req.Excerpt)
+	response.OkWithData(c, gin.H{
+		"html":        result.HTML,
+		"text":        result.Text,
+		"wordCount":   result.WordCount,
+		"readingTime": result.ReadingTime,
+		"excerpt":     result.Excerpt,
+	})
 }
 
 // Create 处理 POST /api/admin/posts。
