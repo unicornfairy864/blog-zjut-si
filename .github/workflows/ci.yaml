@@ -29,11 +29,12 @@ jobs:
 
       - name: build
         working-directory: apps/server
-        run: go build ./...
+        # -tags nodynamic：WebP 用内嵌 wazero 后端，与 Dockerfile 保持一致。
+        run: go build -tags nodynamic ./...
 
       - name: vet
         working-directory: apps/server
-        run: go vet ./...
+        run: go vet -tags nodynamic ./...
 
       # action v6 只认 golangci-lint v1；v2 必须配 v8，否则直接 exit 3。
       # 版本固定，避免 latest 漂移把 CI 变成随机失败。

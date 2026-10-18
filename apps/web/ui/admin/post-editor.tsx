@@ -18,6 +18,7 @@ import { swrKeys } from "@/lib/swr/keys";
 import { cn, formatTime } from "@/lib/utils";
 import { postEditorSchema, type PostEditorValues } from "@/lib/zod/post";
 import { PostStatusBadge } from "@/ui/admin/post-status-badge";
+import { MediaPicker } from "@/ui/admin/media-picker";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
 import { Button } from "@/ui/shadcn/button";
 import { Input } from "@/ui/shadcn/input";
@@ -97,7 +98,7 @@ export function PostEditor({ postId }: { postId: number | null }) {
   const [createRedirect, setCreateRedirect] = useState(true);
   const [savedSlug, setSavedSlug] = useState("");
 
-  const { register, reset, trigger, getValues, watch, formState } =
+  const { register, reset, setValue, trigger, getValues, watch, formState } =
     useForm<PostEditorValues>({
       resolver: zodResolver(postEditorSchema),
       defaultValues: EMPTY_VALUES,
@@ -204,6 +205,27 @@ export function PostEditor({ postId }: { postId: number | null }) {
     if (formState.isDirty) {
       void persistRef.current({ silent: true });
     }
+  };
+
+  // 把媒体库选中的图片 Markdown 插到光标处（D7：图文混排）。
+  const insertMarkdown = (snippet: string) => {
+    const textarea = document.getElementById(
+      "post-content",
+    ) as HTMLTextAreaElement | null;
+    const current = getValues("contentMd");
+    const start = textarea?.selectionStart ?? current.length;
+    const end = textarea?.selectionEnd ?? current.length;
+    const next = `${current.slice(0, start)}${snippet}${current.slice(end)}`;
+
+    setValue("contentMd", next, { shouldDirty: true });
+    requestAnimationFrame(() => {
+      if (!textarea) {
+        return;
+      }
+      textarea.focus();
+      const position = start + snippet.length;
+      textarea.setSelectionRange(position, position);
+    });
   };
 
   // 预览：打开面板后按 600ms 防抖请求服务端，与发布共用同一渲染管线。
@@ -527,6 +549,14 @@ export function PostEditor({ postId }: { postId: number | null }) {
               placeholder="# 标题&#10;&#10;开始写正文，支持 GFM 表格、任务列表与代码块。"
               {...register("contentMd", { onBlur: saveOnBlur })}
             />
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-sm font-medium">插入图片</summary>
+              <div className="mt-3">
+                <MediaPicker
+                  onPick={(markdown) => insertMarkdown(`\n\n${markdown}\n\n`)}
+                />
+              </div>
+            </details>
           </div>
 
           {previewOpen ? (

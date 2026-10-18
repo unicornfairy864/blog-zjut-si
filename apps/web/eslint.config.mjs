@@ -25,6 +25,12 @@ const eslintConfig = [
     },
   },
   {
+    // agent.md §8：明确不使用 next/image，图片由 <img> / <PostImage> 输出 srcset。
+    rules: {
+      "@next/next/no-img-element": "off",
+    },
+  },
+  {
     ignores: [
       "node_modules/**",
       ".next/**",

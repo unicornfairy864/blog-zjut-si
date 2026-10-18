@@ -30,7 +30,7 @@ dev-web:
 build: build-server build-web
 
 build-server:
-	cd $(SERVER_DIR) && CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w" -o blogd .
+	cd $(SERVER_DIR) && CGO_ENABLED=0 $(GO) build -tags nodynamic -trimpath -ldflags "-s -w" -o blogd .
 
 build-web:
 	cd $(WEB_DIR) && $(PNPM) build

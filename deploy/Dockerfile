@@ -29,7 +29,8 @@ COPY apps/server/go.mod apps/server/go.sum ./
 RUN go mod download
 COPY apps/server/ ./
 # CGO disabled；迁移脚本已 //go:embed 进二进制。
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/blogd .
+# -tags nodynamic 让 gen2brain/webp 走内置 wazero（不依赖宿主 libwebp）。
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nodynamic -trimpath -ldflags "-s -w" -o /out/blogd .
 
 # ---------- 4. 运行时 ----------
 FROM node:24-bookworm-slim AS runtime

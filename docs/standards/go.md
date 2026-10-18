@@ -110,7 +110,7 @@ func TestLogin_Locked(t *testing.T) {
 gofmt -l .            # 必须为空
 go vet ./...
 golangci-lint run     # govet,errcheck,staticcheck,revive,gosec,bodyclose,unparam
-go build ./...
+go build -tags nodynamic ./...   # WebP 走 wazero，不依赖宿主 libwebp
 ```
 
 提交前跑 `make check`（含前端 lint 与 typecheck）。

@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.4**（2026-10-18 D6 实现修订，见 §22）
+> 版本：**v1.5**（2026-10-18 D7 实现修订，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -51,6 +51,8 @@
                                               ├ /_next/*       → Next :3000（+ /favicon.ico）
                                               └ 其余           → 404
 ```
+
+管理端 8641 额外直出 `/uploads/*`（仅本地媒体库与编辑器预览用）；8640 上 `/uploads` 仍为 404，由宿主 nginx 直出。
 
 | 组件 | 职责 | 明确不做 |
 | --- | --- | --- |
@@ -541,7 +543,7 @@ apps/web/
 
 | 端 | 依赖 |
 | --- | --- |
-| Go | gin, gorm, glebarez/sqlite, golang-migrate, viper, goldmark(+GFM/attributes), chroma/v2, bluemonday, google/uuid, golang.org/x/crypto(argon2), golang.org/x/sync(errgroup), gen2brain/webp（wazero）, gowebdav, golang.org/x/time |
+| Go | gin, gorm, glebarez/sqlite, golang-migrate, viper, goldmark(+GFM/attributes), chroma/v2, bluemonday, google/uuid, golang.org/x/crypto(argon2), golang.org/x/sync(errgroup), gen2brain/webp（wazero，构建加 `-tags nodynamic`）, golang.org/x/image(draw), gowebdav, golang.org/x/time |
 | Web | next(15.x), react, tailwindcss(3.x), shadcn/ui（含 @radix-ui/*、class-variance-authority、tailwindcss-animate）, lucide-react, swr, zod, react-hook-form(+@hookform/resolvers), date-fns, katex, clsx + tailwind-merge |
 | 测试 | go test + testify；vitest + testing-library；playwright |
 
@@ -669,6 +671,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.5 | 2026-10-18 | D7 实现修订：管理端（8641）增加 `/uploads/*` 磁盘直出，供媒体库与编辑器预览（8640 仍由 nginx 直出）；白名单补 `golang.org/x/image`（缩放），明确 `gen2brain/webp` 用 `-tags nodynamic` 的 wazero 后端构建 |
 | 1.4 | 2026-10-18 | D6 实现修订：新增错误码 1007 `ERROR_GONE`（归档与已删除文章返回 410，避免与 1002/404 混淆） |
 | 1.0 | 2026-10-17 | 契约冻结：21 表、双 listener、12 天排期 |
 | 1.3 | 2026-10-18 | §19 增加第 10 条：每次对话（任务批次）结束前必须提交，作者信息沿用仓库配置 |

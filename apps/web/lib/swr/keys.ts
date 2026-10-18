@@ -7,4 +7,7 @@ export const swrKeys = {
     `/api/admin/posts?status=${status}&page=${page}&pageSize=${pageSize}`,
   /** 文章详情。 */
   adminPost: (id: number) => `/api/admin/posts/${id}`,
+  /** 媒体库列表。 */
+  adminMedia: (page: number, pageSize: number) =>
+    `/api/admin/media?page=${page}&pageSize=${pageSize}`,
 } as const;

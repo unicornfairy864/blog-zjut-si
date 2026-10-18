@@ -108,6 +108,31 @@
 { "html": "<h2 id=\"h-1a2b3c4d\">标题</h2>", "text": "标题", "wordCount": 2, "readingTime": 1, "excerpt": "标题" }
 ```
 
+### 媒体
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /api/admin/media` | `multipart/form-data`：`alt`（可选，必须排在 `file` 前）+ `file`；≤30MB、≤5000 万像素；内容 sha256 去重 |
+| `GET /api/admin/media` | 媒体库分页，按创建时间倒序 |
+| `DELETE /api/admin/media/{id}` | 未被引用才删除；被引用返回 `409 / 2002` 与引用清单 |
+| `POST /api/admin/media/{id}/retry` | 从本地原图重新生成变体 |
+
+上传成功（`data`）：
+
+```json
+{
+  "id": 1, "sha256": "786a8d…", "originalName": "photo.jpg", "mime": "image/jpeg", "ext": "jpg",
+  "bytes": 177841, "width": 2400, "height": 1200, "pixels": 2880000,
+  "alt": "示例图", "status": "ready", "error": "",
+  "url": "/uploads/78/786a8d…/1600.webp",
+  "variants": { "1600": "/uploads/78/786a8d…/1600.webp" },
+  "createdAt": 1760000000, "updatedAt": 1760000000
+}
+```
+
+`img_base_url` 为空时 URL 是相对路径 `/uploads/…`（公开站由 nginx 直出；
+管理端 8641 直出 `/uploads/*` 供媒体库与编辑器预览）。
+
 ## 内部组（8641，仅容器内或隧道）
 
 | 端点 | 说明 |
@@ -124,4 +149,4 @@
 
 `/site`、`/tags*`、`/archive`、`/series*`、`/links`、`/pages/*`、`/events/view`、
 `/attachments/*`、`/preview/{token}`、`/posts/{slug}/related`、`/posts/{slug}/comments`、
-`/posts/{slug}/like`、媒体与评论管理、`/stats/*`、`/jobs*`、`/audit-logs`、`POST /api/internal/revalidate`。
+`/posts/{slug}/like`、评论管理、`/stats/*`、`/jobs*`、`/audit-logs`、`POST /api/internal/revalidate`。

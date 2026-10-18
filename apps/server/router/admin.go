@@ -5,6 +5,7 @@ import (
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/api/v1"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/core/edge"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/global"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/middleware"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/errs"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/response"
@@ -39,8 +40,17 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.POST("/posts/:id/publish", v1.ApiGroupApp.Admin.Post.Publish)
 			authorized.POST("/posts/:id/unpublish", v1.ApiGroupApp.Admin.Post.Unpublish)
 			authorized.GET("/posts/:id/revisions", v1.ApiGroupApp.Admin.Post.Revisions)
+
+			// 媒体（D7）：上传、媒体库、删除与重试。
+			authorized.GET("/media", v1.ApiGroupApp.Admin.Media.List)
+			authorized.POST("/media", v1.ApiGroupApp.Admin.Media.Upload)
+			authorized.DELETE("/media/:id", v1.ApiGroupApp.Admin.Media.Delete)
+			authorized.POST("/media/:id/retry", v1.ApiGroupApp.Admin.Media.Retry)
 		}
 	}
+
+	// 管理端直出本地上传的图片：8641 只经隧道可达，8640 仍由 nginx 直出（§2）。
+	engine.GET("/uploads/*filepath", edge.ServeUploads(global.Config.Upload.Dir))
 
 	engine.NoRoute(func(c *gin.Context) {
 		if edge.IsAdminPagePath(c.Request.URL.Path) {

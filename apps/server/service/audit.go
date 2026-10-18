@@ -26,6 +26,10 @@ const (
 	AuditActionPostPublish   = "post.publish"
 	AuditActionPostUnpublish = "post.unpublish"
 	AuditActionPostArchive   = "post.archive"
+
+	AuditActionMediaUpload = "media.upload"
+	AuditActionMediaDelete = "media.delete"
+	AuditActionMediaRetry  = "media.retry"
 )
 
 // AuditService 写 audit_logs。

@@ -8,6 +8,7 @@ type ServiceGroup struct {
 	Auth    AuthService
 	Audit   AuditService
 	Health  HealthService
+	Media   MediaService
 	Post    PostService
 	Setting SettingService
 }
