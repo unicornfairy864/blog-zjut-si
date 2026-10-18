@@ -31,7 +31,9 @@ cp .env.example .env
 vi .env      # 填 BLOG_ADMIN_USERNAME / BLOG_ADMIN_PASSWORD（≥16 位）
 
 # 4) 数据目录（bind mount，见 compose.yaml）
+#    容器里 blogd 以 node(uid 1000) 运行，属主必须是 1000，否则 SQLite 无法建库。
 sudo mkdir -p /data/blog/db /data/blog/uploads
+sudo chown -R 1000:1000 /data/blog
 
 # 5) 构建并启动（首次会构建 Next 与 Go，约数分钟）
 docker compose up -d --build
