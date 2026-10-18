@@ -35,10 +35,12 @@ jobs:
         working-directory: apps/server
         run: go vet ./...
 
+      # action v6 只认 golangci-lint v1；v2 必须配 v8，否则直接 exit 3。
+      # 版本固定，避免 latest 漂移把 CI 变成随机失败。
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.15.0
           working-directory: apps/server
           args: --timeout=5m
 
