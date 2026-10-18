@@ -26,6 +26,17 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 		{
 			authorized.GET("/auth/me", v1.ApiGroupApp.Admin.Me)
 			authorized.POST("/auth/logout", v1.ApiGroupApp.Admin.Logout)
+
+			// 文章（D4）：草稿 CRUD + 状态机 + 版本快照。
+			authorized.GET("/posts", v1.ApiGroupApp.Admin.Post.List)
+			authorized.POST("/posts", v1.ApiGroupApp.Admin.Post.Create)
+			authorized.GET("/posts/:id", v1.ApiGroupApp.Admin.Post.Detail)
+			authorized.PUT("/posts/:id", v1.ApiGroupApp.Admin.Post.Replace)
+			authorized.PATCH("/posts/:id", v1.ApiGroupApp.Admin.Post.Update)
+			authorized.DELETE("/posts/:id", v1.ApiGroupApp.Admin.Post.Delete)
+			authorized.POST("/posts/:id/publish", v1.ApiGroupApp.Admin.Post.Publish)
+			authorized.POST("/posts/:id/unpublish", v1.ApiGroupApp.Admin.Post.Unpublish)
+			authorized.GET("/posts/:id/revisions", v1.ApiGroupApp.Admin.Post.Revisions)
 		}
 	}
 

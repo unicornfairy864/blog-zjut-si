@@ -4,6 +4,7 @@ package admin
 // ApiGroup 聚合管理端接口。
 type ApiGroup struct {
 	AuthApi
+	Post PostApi
 }
 
 // Group 是管理端接口聚合实例。

@@ -19,6 +19,13 @@ const (
 	AuditActionLoginFailed = "auth.login_failed"
 	AuditActionLoginLocked = "auth.login_locked"
 	AuditActionAdminBoot   = "auth.admin_bootstrap"
+
+	AuditActionPostCreate    = "post.create"
+	AuditActionPostUpdate    = "post.update"
+	AuditActionPostDelete    = "post.delete"
+	AuditActionPostPublish   = "post.publish"
+	AuditActionPostUnpublish = "post.unpublish"
+	AuditActionPostArchive   = "post.archive"
 )
 
 // AuditService 写 audit_logs。
