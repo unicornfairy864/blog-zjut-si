@@ -34,16 +34,17 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o
 # ---------- 4. 运行时 ----------
 FROM node:24-bookworm-slim AS runtime
 
+# slim 镜像不带 xz-utils，`tar -J` 会报 "xz: Cannot exec"；解包 s6-overlay 前必须先装。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl tzdata xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz /tmp/
 RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
     && tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz \
     && rm -f /tmp/s6-overlay-*.tar.xz
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=server-build /out/blogd /usr/local/bin/blogd
 COPY --from=web-build /src/apps/web/.next/standalone /app
