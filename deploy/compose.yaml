@@ -1,0 +1,36 @@
+# 端口只绑宿主回环（C3）；容器内监听 0.0.0.0 才能被 docker 映射到。
+#
+# 用法：
+#   cd deploy && cp .env.example .env && 编辑 .env
+#   docker compose -f compose.yaml up -d --build
+
+services:
+  blog:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: zjut-si/blog:latest
+    container_name: zjut-blog
+    restart: always
+    mem_limit: 1.5g
+    ports:
+      - "127.0.0.1:8640:8640"
+      - "127.0.0.1:8641:8641"
+    environment:
+      BLOG_SERVER_PUBLIC: ":8640"
+      BLOG_SERVER_ADMIN: ":8641"
+      BLOG_WEB_UPSTREAM: "http://127.0.0.1:3000"
+      BLOG_DB_PATH: "/data/blog/db/blog.db"
+      BLOG_UPLOAD_DIR: "/data/blog/uploads"
+      BLOG_LOG_LEVEL: "${BLOG_LOG_LEVEL:-info}"
+      # 首次启动且 admins 表为空时创建账号；建好后可从此处删除。
+      BLOG_ADMIN_USERNAME: "${BLOG_ADMIN_USERNAME:-}"
+      BLOG_ADMIN_PASSWORD: "${BLOG_ADMIN_PASSWORD:-}"
+    volumes:
+      - /data/blog/db:/data/blog/db
+      - /data/blog/uploads:/data/blog/uploads
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

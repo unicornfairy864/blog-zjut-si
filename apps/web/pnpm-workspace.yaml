@@ -1,0 +1,7 @@
+# pnpm 12 的设置入口（package.json 里的 pnpm 字段已不再读取）。
+# 默认阻止依赖的安装脚本，这里显式放行两个必需项：
+# - esbuild：vitest 的打包器，需要下载平台二进制
+# - unrs-resolver：eslint-import-resolver-typescript 的解析器
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true

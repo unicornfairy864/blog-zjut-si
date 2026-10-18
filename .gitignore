@@ -1,0 +1,36 @@
+# 依赖与构建产物
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Go
+/apps/server/blogd
+/apps/server/blogd.exe
+*.test
+coverage.out
+coverage.html
+
+# 运行时数据
+*.db
+*.db-wal
+*.db-shm
+data/
+uploads/
+
+# 环境与本地配置
+.env
+.env.*
+!.env.example
+config.local.yaml
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# 只忽略私有资料；docs/ 下的契约、ADR、规范必须入库
+docs/private/

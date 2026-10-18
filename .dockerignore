@@ -1,0 +1,22 @@
+# 构建上下文是仓库根目录（deploy/compose.yaml 里 context: ..）
+.git
+.github
+docs
+deploy/.env
+
+# 依赖与构建产物
+apps/web/node_modules
+apps/web/.next
+apps/web/coverage
+apps/web/e2e
+apps/server/blogd
+apps/server/blogd.exe
+apps/server/data
+apps/server/resource
+apps/server/testdata
+
+# 运行时数据
+*.db
+*.db-wal
+*.db-shm
+uploads

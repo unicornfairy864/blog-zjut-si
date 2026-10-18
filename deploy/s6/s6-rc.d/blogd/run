@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+# Go 进程：两条 listener（:8640 公开 / :8641 管理）。
+# setuidgid 保证数据库与 uploads 的属主是 node（镜像里已 chown）。
+exec s6-setuidgid node /usr/local/bin/blogd

@@ -1,0 +1,30 @@
+-- 000001_init_schema.down.sql
+-- 回滚顺序与建表顺序相反；先删触发器再删 FTS 表。
+
+DROP TRIGGER IF EXISTS posts_fts_au;
+DROP TRIGGER IF EXISTS posts_fts_ad;
+DROP TRIGGER IF EXISTS posts_fts_ai;
+DROP TABLE IF EXISTS posts_fts;
+
+DROP TABLE IF EXISTS link_checks;
+DROP TABLE IF EXISTS pages;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS links;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS stats_daily;
+DROP TABLE IF EXISTS page_views;
+DROP TABLE IF EXISTS likes;
+DROP TABLE IF EXISTS comments;
+DROP TABLE IF EXISTS post_attachments;
+DROP TABLE IF EXISTS media;
+DROP TABLE IF EXISTS redirects;
+DROP TABLE IF EXISTS preview_tokens;
+DROP TABLE IF EXISTS series;
+DROP TABLE IF EXISTS post_tags;
+DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS post_revisions;
+DROP TABLE IF EXISTS posts;
+DROP TABLE IF EXISTS login_attempts;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS admins;

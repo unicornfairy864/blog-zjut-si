@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+# Next 进程：standalone 产物，监听 127.0.0.1:3000，只由 Go 反代访问。
+# NODE_OPTIONS 在镜像 ENV 里已限制堆为 384MB（agent.md §15）。
+exec s6-setuidgid node /usr/local/bin/node /app/server.js

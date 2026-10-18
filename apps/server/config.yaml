@@ -1,0 +1,51 @@
+# zjut.si 博客进程配置（容器内默认值）
+#
+# 本地开发：直接 go run .，会使用 ./data 下的相对路径。
+# 容器部署：由 compose 通过环境变量覆盖，见 deploy/compose.yaml。
+# 环境变量前缀 BLOG_，层级用下划线，例如 BLOG_DB_PATH=/data/blog/db/blog.db。
+
+server:
+  # C3：容器内必须监听 :8640 / :8641（即 0.0.0.0），端口映射才可达。
+  public: ":8640"
+  admin: ":8641"
+  read_header_timeout_seconds: 10
+  idle_timeout_seconds: 120
+  shutdown_timeout_seconds: 15
+  # 容器里看到的来源是 docker 网关，不是回环（agent.md §7）。
+  trusted_proxies:
+    - "127.0.0.1"
+    - "172.16.0.0/12"
+
+web:
+  # Next 进程地址；仅本机回环。
+  upstream: "http://127.0.0.1:3000"
+
+db:
+  path: "./data/blog.db"
+  # 4 连接 × 16MB 缓存 = 64MB（agent.md §7 / §15）。
+  max_open_conns: 4
+  cache_size_kib: 16384
+  busy_timeout_ms: 5000
+  # 启动时自动推进迁移；预发/回滚时可用 BLOG_DB_AUTO_MIGRATE=false 关闭。
+  auto_migrate: true
+
+log:
+  level: "info"
+
+auth:
+  session_ttl_hours: 168
+  cookie_name: "sid"
+  # 管理端走 http://localhost:8641，不能设 Secure（agent.md §9）。
+  cookie_secure: false
+  login_per_minute: 5
+  lock_failures: 5
+  lock_window_minutes: 10
+  lock_minutes: 30
+
+upload:
+  dir: "./data/uploads"
+  max_bytes: 31457280
+
+task:
+  enabled: true
+  interval_seconds: 60
