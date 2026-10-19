@@ -7,6 +7,7 @@ package service
 type ServiceGroup struct {
 	Auth    AuthService
 	Audit   AuditService
+	Comment CommentService
 	Health  HealthService
 	Media   MediaService
 	Post    PostService

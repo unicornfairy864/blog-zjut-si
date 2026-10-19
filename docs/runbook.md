@@ -404,3 +404,47 @@ docker compose start
 
 塞完数据后 `curl -s http://127.0.0.1:8640/api/tags` 应能看到 `go`，`/about` 页面也能打开。
 
+---
+
+## 13. 评论自测（D11 / G5 的评论部分）
+
+设已发布文章的 slug 为 `<slug>`，容器在跑。公开接口直接打 8640，管理端审核建议开隧道用浏览器
+（`http://localhost:8641/admin/comments`）。
+
+```bash
+# 1) 发一条评论 → 一律 pending
+curl -s -X POST http://127.0.0.1:8640/api/posts/<slug>/comments \
+  -H 'Content-Type: application/json' \
+  -d '{"authorName":"测试","contentMd":"第一条评论"}'
+# 期望：{"code":0,"data":{"id":1,"status":"pending","createdAt":…},"msg":"操作成功"}
+
+# 2) pending 不进公开列表
+curl -s http://127.0.0.1:8640/api/posts/<slug>/comments      # total = 0
+
+# 3) 管理端通过后再看 → total = 1，且列表里没有邮箱/ip_hash/ua
+#    浏览器：/admin/comments → 待审核 → 通过
+curl -s http://127.0.0.1:8640/api/posts/<slug>/comments
+
+# 4) 嵌套：回复顶层评论（parentId=1），通过后出现在该评论的 replies 里（固定两层）
+curl -s -X POST http://127.0.0.1:8640/api/posts/<slug>/comments \
+  -H 'Content-Type: application/json' \
+  -d '{"authorName":"乙","contentMd":"回复","parentId":1}'
+
+# 5) 限流：连发 4 条，第 4 条应为 429 / 1005（3 次 / 10 分钟 / IP）
+for i in 1 2 3 4; do
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://127.0.0.1:8640/api/posts/<slug>/comments \
+    -H 'Content-Type: application/json' -d '{"authorName":"限流","contentMd":"x"}'
+done; echo
+
+# 6) 关闭评论的文章 → 403 / 1001
+#    目前只能用接口或 SQL 关：UPDATE posts SET allow_comments = 0 WHERE slug = '<slug>';
+#    （管理端编辑器的「允许评论」开关排在 D14 管理端补全里一起做）
+
+# 7) 标 spam 后从公开列表消失；标 deleted 是软删，管理端 status=deleted 仍能查到
+```
+
+XSS 顺带验一下：正文里带 `<script>alert(1)</script>` 的评论，入库后的 `contentHtml` 应已被过滤
+（和文章正文同一套 goldmark + bluemonday）。
+
+限流是**进程内令牌桶**（`utils.NewKeyedLimiter`），重启容器即清零 —— 单实例部署够用，不是缺陷。
+

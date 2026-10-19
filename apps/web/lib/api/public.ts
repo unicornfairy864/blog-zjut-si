@@ -59,8 +59,43 @@ export interface PublicPostDetail extends PublicPostListItem {
   seoDescription: string;
   canonicalUrl: string;
   lang: string;
+  /** 作者是否允许评论（false 时前端不显示表单）。 */
+  allowComments: boolean;
   prev: PublicNeighbor | null;
   next: PublicNeighbor | null;
+}
+
+/** 公开评论项；`replies` 只出现在顶层评论上（嵌套固定两层）。 */
+export interface PublicComment {
+  id: number;
+  parentId: number | null;
+  authorName: string;
+  authorUrl: string;
+  contentHtml: string;
+  createdAt: number;
+  replies?: PublicComment[];
+}
+
+/** 评论列表出参。 */
+export interface CommentListResult {
+  total: number;
+  list: PublicComment[];
+}
+
+/** 提交评论的入参；邮箱与网址可空。 */
+export interface CommentCreateInput {
+  authorName: string;
+  authorEmail?: string;
+  authorUrl?: string;
+  contentMd: string;
+  parentId?: number | null;
+}
+
+/** 提交结果：新评论一律 pending，等管理员审核后才公开。 */
+export interface CommentCreateResult {
+  id: number;
+  status: string;
+  createdAt: number;
 }
 
 /** 统一分页出参。 */
@@ -205,6 +240,21 @@ export const publicApi = {
   related(slug: string) {
     return apiFetch<{ list: PublicPostListItem[] }>(
       `/api/posts/${encodeURIComponent(slug)}/related`,
+    );
+  },
+
+  /** 文章的已通过评论：顶层评论 + 一层回复（agent.md §5）。 */
+  comments(slug: string) {
+    return apiFetch<CommentListResult>(
+      `/api/posts/${encodeURIComponent(slug)}/comments`,
+    );
+  },
+
+  /** 提交评论；成功即 pending，等管理员审核后才出现在公开列表里。 */
+  createComment(slug: string, input: CommentCreateInput) {
+    return apiFetch<CommentCreateResult>(
+      `/api/posts/${encodeURIComponent(slug)}/comments`,
+      { json: input },
     );
   },
 

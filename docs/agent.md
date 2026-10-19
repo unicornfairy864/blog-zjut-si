@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.6**（2026-10-19 D8 实现修订，见 §22）
+> 版本：**v1.9**（2026-10-19 D11 评论，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -265,6 +265,20 @@ ready: refs==0 → 物理删除；refs>0 → 409 (2002)
 - worker 全局并发 **固定为 1**
 - `pixels > 50_000_000` → `failed / 2003`
 - 引用检查三处：`cover_media_id`、`og_media_id`、`content_md` 含 `storage_key`
+
+**评论**
+
+```
+新建 ──▶ pending ──管理员通过──▶ approved（公开可见）
+            ├──管理员标记──▶ spam（不进公开列表）
+            └──管理员删除──▶ deleted（软删，记录保留，可在管理端按状态查回）
+```
+
+- 嵌套**固定两层**：顶层评论 + 它的一层回复；回复的回复挂到同一个顶层下（按 `root_id` 聚合），不再加深
+- 新评论一律 `pending`，公开列表只出 `approved`
+- 限流 **3 次 / 10 分钟 / IP**（进程内令牌桶，超限 `429 / 1005`）
+- `posts.comment_count` 只统计 `approved`，状态变更时重算
+- 邮箱只入库（含 `email_hash`），任何公开接口都不返回；`ip_hash` 同理
 
 **任务**
 
@@ -693,6 +707,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.9 | 2026-10-19 | D11 评论（M5）：公开 `GET|POST /posts/{slug}/comments`（嵌套固定两层、只出 approved、3 次/10 分钟/IP 限流）、管理端 `GET|PATCH /comments` 与 `POST /comments/bulk`；新评论一律 pending，`posts.comment_count` 只算 approved；`PublicPostDetail` 增 `allowComments`；§6 补评论状态机；管理端新增 `/admin/comments` 审核页 |
 | 1.8 | 2026-10-19 | D9–D10 实现修订：公开端补 `GET /site`、`/tags`、`/tags/{slug}`、`/archive`、`/series`、`/series/{slug}`、`/links`、`/pages/{slug}`、`/posts/{slug}/related`；列表项与详情增 `cover`（四档 `variants` + `origUrl`）与 `tags`，详情增 `prev`/`next`；正文图片在读取时补 `srcset`/`sizes`/`width`/`height`/`loading`；`links.status` 枚举定为 `active`/`hidden`（与 000001 默认值一致）；410 由 `apps/web/middleware.ts` 返回（App Router 页面无法自定义状态码）；web 端新增 `PostImage`/`PostContent`/`PostCard`/`PostToc`/`Pagination`、blurhash 解码与 KaTeX 懒加载 |
 | 1.7 | 2026-10-19 | D8 补充：`media_archive` 同时推四档变体（`cloudreve.archive_variants`，默认开）；新增 `cloudreve.public_base_url`，公开详情 `contentHtml` 在读取时给本站图片包上「查看原图」链接（`MediaItem.origUrl` 同步暴露）；明确图床「文件名规则」必须为 `{originname}` |
 | 1.6 | 2026-10-19 | D8 实现修订：白名单补 `buckket/go-blurhash`；`media_process` / `media_archive` 接入 jobs 调度器（并发 1、退避 1m/5m/15m）；Cloudreve 归档配置（`cloudreve.*`，口令只走环境变量） |

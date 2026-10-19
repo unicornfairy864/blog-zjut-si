@@ -31,6 +31,11 @@ const (
 	AuditActionMediaDelete  = "media.delete"
 	AuditActionMediaRetry   = "media.retry"
 	AuditActionMediaArchive = "media.archive"
+
+	AuditActionCommentApprove = "comment.approve"
+	AuditActionCommentSpam    = "comment.spam"
+	AuditActionCommentDelete  = "comment.delete"
+	AuditActionCommentBulk    = "comment.bulk"
 )
 
 // AuditService 写 audit_logs。

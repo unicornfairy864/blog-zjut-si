@@ -46,6 +46,11 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.POST("/media", v1.ApiGroupApp.Admin.Media.Upload)
 			authorized.DELETE("/media/:id", v1.ApiGroupApp.Admin.Media.Delete)
 			authorized.POST("/media/:id/retry", v1.ApiGroupApp.Admin.Media.Retry)
+
+			// 评论审核（D11）：列表、单条与批量；写操作在 authorized 组内自带 CSRF（§5）。
+			authorized.GET("/comments", v1.ApiGroupApp.Admin.Comment.List)
+			authorized.PATCH("/comments", v1.ApiGroupApp.Admin.Comment.Patch)
+			authorized.POST("/comments/bulk", v1.ApiGroupApp.Admin.Comment.Bulk)
 		}
 	}
 

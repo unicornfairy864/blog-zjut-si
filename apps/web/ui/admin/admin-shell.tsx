@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { href: "/admin", label: "仪表盘" },
   { href: "/admin/posts", label: "文章" },
   { href: "/admin/media", label: "媒体" },
+  { href: "/admin/comments", label: "评论" },
 ] as const;
 
 /** 管理端外壳：顶栏 + 导航 + 内容区（仅桌面宽度，agent.md §20）。 */

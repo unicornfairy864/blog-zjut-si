@@ -10,4 +10,7 @@ export const swrKeys = {
   /** 媒体库列表。 */
   adminMedia: (page: number, pageSize: number) =>
     `/api/admin/media?page=${page}&pageSize=${pageSize}`,
+  /** 评论审核队列；status 传 all 表示全部。 */
+  adminComments: (status: string, page: number, pageSize: number) =>
+    `/api/admin/comments?status=${status}&page=${page}&pageSize=${pageSize}`,
 } as const;

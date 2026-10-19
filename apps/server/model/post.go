@@ -477,6 +477,7 @@ func (p Post) PublicListItem() PublicPostListItem {
 type PublicPostDetail struct {
 	PublicPostListItem
 	ContentHTML    string        `json:"contentHtml"`
+	AllowComments  bool          `json:"allowComments"`
 	SEOTitle       string        `json:"seoTitle"`
 	SEODescription string        `json:"seoDescription"`
 	CanonicalURL   string        `json:"canonicalUrl"`
@@ -490,6 +491,7 @@ func (p Post) PublicDetail() PublicPostDetail {
 	return PublicPostDetail{
 		PublicPostListItem: p.PublicListItem(),
 		ContentHTML:        p.ContentHTML,
+		AllowComments:      p.AllowComments,
 		SEOTitle:           p.SEOTitle,
 		SEODescription:     p.SEODescription,
 		CanonicalURL:       p.CanonicalURL,

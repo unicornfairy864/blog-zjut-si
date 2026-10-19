@@ -58,7 +58,7 @@
 
 已发布文章详情，返回服务端渲染好的 `contentHtml`（不含 Markdown 源码）。
 在列表项字段之外，详情还带 `contentHtml`、`seoTitle`、`seoDescription`、`canonicalUrl`、`lang`、
-`prev` / `next`（按 `published_at` 相邻，仅 published，边界为 `null`）。
+`allowComments`（false 时前端不显示评论表单）、`prev` / `next`（按 `published_at` 相邻，仅 published，边界为 `null`）。
 
 配了 `cloudreve.public_base_url` 时，`contentHtml` 里的本站图片会在返回时被包上一层
 「查看原图」链接（`<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank"
@@ -81,6 +81,54 @@ rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返�
 ```json
 { "code": 0, "data": { "list": [ /* 公开列表项 */ ] }, "msg": "操作成功" }
 ```
+
+### `GET /api/posts/{slug}/comments`
+
+已通过（`approved`）的评论：顶层评论带一层 `replies`（嵌套固定两层，回复的回复会扁平到同一层）。
+
+```json
+{
+  "code": 0,
+  "data": {
+    "total": 3,
+    "list": [
+      { "id": 1, "parentId": null, "authorName": "甲", "authorUrl": "",
+        "contentHtml": "<p>你好</p>", "createdAt": 1760000000,
+        "replies": [
+          { "id": 2, "parentId": 1, "authorName": "乙", "authorUrl": "",
+            "contentHtml": "<p>+1</p>", "createdAt": 1760000100 }
+        ] }
+    ]
+  },
+  "msg": "操作成功"
+}
+```
+
+不返回邮箱、`ip_hash`、`ua`。文章不存在 / 草稿 → `404 / 1002`，归档 / 已删除 → `410 / 1007`。
+
+### `POST /api/posts/{slug}/comments`
+
+请求体：
+
+```json
+{ "authorName": "甲", "authorEmail": "a@b.c", "authorUrl": "https://example.com",
+  "contentMd": "你好", "parentId": null }
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `authorName` | 必填，1–50 字符 |
+| `authorEmail` | 可空；非空需像邮箱且 ≤200 字符，**只入库不公开** |
+| `authorUrl` | 可空；非空需 `http(s)://` 且 ≤200 字符 |
+| `contentMd` | 必填，1–2000 字符，服务端渲染为 `contentHtml`（同一套 goldmark + bluemonday） |
+| `parentId` | 可空；必须存在且属于同一篇文章 |
+
+```json
+{ "code": 0, "data": { "id": 5, "status": "pending", "createdAt": 1760000200 }, "msg": "操作成功" }
+```
+
+新评论一律 `pending`，审核通过后才出现在公开列表。限流 **3 次 / 10 分钟 / IP**，超限 `429 / 1005`；
+文章 `allow_comments = 0` 时 `403 / 1001`。
 
 ### `GET /api/site`
 
@@ -294,6 +342,30 @@ rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返�
 `img_base_url` 为空时 URL 是相对路径 `/uploads/…`（公开站由 nginx 直出；
 管理端 8641 直出 `/uploads/*` 供媒体库与编辑器预览）。
 
+### 评论
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/comments` | 审核队列；`status` 缺省 `pending`，传 `all` 看全部，按创建时间倒序 |
+| `PATCH /api/admin/comments` | 单条改状态：`{"id":1,"status":"approved"}`，只接受 `approved`/`spam`/`deleted` |
+| `POST /api/admin/comments/bulk` | 批量改状态：`{"ids":[1,2],"status":"spam"}` → `{"updated":2}`（1–200 个 id） |
+
+```json
+// GET /api/admin/comments?status=pending  →  data
+{
+  "list": [
+    { "id": 1, "postId": 3, "postSlug": "hello", "postTitle": "你好", "parentId": null,
+      "authorName": "甲", "authorEmail": "a@b.c", "authorUrl": "",
+      "contentMd": "你好", "contentHtml": "<p>你好</p>", "status": "pending", "createdAt": 1760000000 }
+  ],
+  "total": 1, "page": 1, "pageSize": 20
+}
+```
+
+- 邮箱只在这里出现；`ip_hash` / `ua` 任何接口都不返回（§9）。
+- 状态变更会重算 `posts.comment_count`（approved 计数）并写 `audit_logs`。
+- `deleted` 是软删：记录保留，用 `status=deleted` 仍能查到。
+
 ## 内部组（8641，仅容器内或隧道）
 
 | 端点 | 说明 |
@@ -308,6 +380,6 @@ rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返�
 
 ## 尚未实现（后续模块）
 
-`/site`、`/tags*`、`/archive`、`/series*`、`/links`、`/pages/*`、`/events/view`、
-`/attachments/*`、`/preview/{token}`、`/posts/{slug}/related`、`/posts/{slug}/comments`、
-`/posts/{slug}/like`、评论管理、`/stats/*`、`/jobs*`、`/audit-logs`、`POST /api/internal/revalidate`。
+`/events/view`、`/attachments/*`、`/preview/{token}`、`/posts/{slug}/like`、`/stats/*`、`/jobs*`、
+`/audit-logs`、`/settings`、`/tags*`、`/series*`、`/links`、`/pages/*`、`/redirects*` 的管理端写接口、
+`POST /api/internal/revalidate`。

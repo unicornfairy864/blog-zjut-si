@@ -28,6 +28,12 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 		api.GET("/posts/:slug/related", v1.ApiGroupApp.Public.Post.Related)
 		api.GET("/search", v1.ApiGroupApp.Public.Post.Search)
 
+		// 公开评论（D11）：读带 ETag；写单独挂 3 次 / 10 分钟 / IP 的限流（§9 / §16 G5）。
+		api.GET("/posts/:slug/comments", v1.ApiGroupApp.Public.Comment.List)
+		api.POST("/posts/:slug/comments",
+			middleware.RateLimit(middleware.NewCommentLimiter(), nil),
+			v1.ApiGroupApp.Public.Comment.Create)
+
 		// 公开只读聚合（D9–D10）：站点信息、标签、归档、系列、友链与静态页。
 		api.GET("/site", v1.ApiGroupApp.Public.Site.Detail)
 		api.GET("/tags", v1.ApiGroupApp.Public.Tag.List)

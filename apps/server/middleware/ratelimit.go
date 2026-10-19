@@ -28,3 +28,8 @@ func RateLimit(limiter *utils.KeyedLimiter, keyFn func(*gin.Context) string) gin
 func NewPublicAPILimiter() *utils.KeyedLimiter {
 	return utils.NewKeyedLimiter(time.Second/20, 20)
 }
+
+// NewCommentLimiter 构造评论限流器：3 次 / 10 分钟 / IP（agent.md §9）。
+func NewCommentLimiter() *utils.KeyedLimiter {
+	return utils.NewKeyedLimiter(10*time.Minute/3, 3)
+}

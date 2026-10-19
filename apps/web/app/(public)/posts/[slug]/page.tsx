@@ -6,6 +6,7 @@ import { cache } from "react";
 import { isApiError, publicApi, type PublicPostDetail } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
 import { formatDate } from "@/lib/utils";
+import { CommentSection } from "@/ui/post/comment-section";
 import { PostCard } from "@/ui/post/post-card";
 import { PostContent } from "@/ui/post/post-content";
 import { PostImage } from "@/ui/post/post-image";
@@ -71,6 +72,9 @@ export default async function PostDetailPage({
     .related(slug)
     .then((result) => result.list)
     .catch(() => []);
+  const comments = await publicApi
+    .comments(slug)
+    .catch(() => ({ total: 0, list: [] }));
   const toc = extractToc(post.contentHtml);
 
   return (
@@ -175,6 +179,15 @@ export default async function PostDetailPage({
           ))}
         </section>
       ) : null}
+
+      <div className="mt-14">
+        <CommentSection
+          slug={post.slug}
+          total={comments.total}
+          comments={comments.list}
+          allowComments={post.allowComments}
+        />
+      </div>
     </div>
   );
 }

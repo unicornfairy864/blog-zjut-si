@@ -88,3 +88,33 @@
 .prose-blog .math-display {
   @apply block overflow-x-auto py-2 text-center;
 }
+
+/* 评论正文（§11）：同一套渲染产物，但字号更小、间距更紧。 */
+.prose-comment {
+  @apply text-sm leading-6;
+  overflow-wrap: break-word;
+}
+
+.prose-comment > * + * {
+  @apply mt-2;
+}
+
+.prose-comment a {
+  @apply underline underline-offset-4;
+}
+
+.prose-comment code {
+  @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.9em];
+}
+
+.prose-comment pre {
+  @apply overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs;
+}
+
+.prose-comment blockquote {
+  @apply border-l-2 border-border pl-3 text-muted-foreground;
+}
+
+.prose-comment img {
+  @apply mx-auto max-w-full rounded-lg;
+}

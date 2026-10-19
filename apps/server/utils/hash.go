@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"sync/atomic"
 )
 
@@ -36,6 +37,13 @@ func SHA256HexBytes(b []byte) string {
 func HashIP(ip string) string {
 	mac := hmac.New(sha256.New, []byte(pepperValue()))
 	mac.Write([]byte("ip|" + ip))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
+}
+
+// HashEmail 对邮箱加盐哈希；先做小写与去空白归一，评论去重与审计只落哈希（agent.md §9）。
+func HashEmail(email string) string {
+	mac := hmac.New(sha256.New, []byte(pepperValue()))
+	mac.Write([]byte("email|" + strings.ToLower(strings.TrimSpace(email))))
 	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
