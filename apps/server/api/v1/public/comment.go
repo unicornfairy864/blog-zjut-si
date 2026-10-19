@@ -27,8 +27,8 @@ const (
 	commentContentMaxLen = 2000
 )
 
-// commentEmailPattern 是"像邮箱"的宽松判断：本地部分 + 带点的域名。
-var commentEmailPattern = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$`)
+// commentEmailPattern 是"像邮箱"的宽松判断：本地部分 + 至少一个带点的域名（a@b.c 也算）。
+var commentEmailPattern = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+$`)
 
 // commentCreateRequest 是提交评论的请求体；parentId 为空表示顶层评论。
 type commentCreateRequest struct {
