@@ -42,7 +42,7 @@ type postUpdateRequest struct {
 	Slug           *string `json:"slug" binding:"omitempty,max=120"`
 	Title          *string `json:"title" binding:"omitempty,min=1,max=200"`
 	Excerpt        *string `json:"excerpt" binding:"omitempty,max=300"`
-	ContentMD      *string `json:"contentMd" binding:"max=2000000"`
+	ContentMD      *string `json:"contentMd" binding:"omitempty,max=2000000"`
 	CoverMediaID   *int64  `json:"coverMediaId"`
 	OGMediaID      *int64  `json:"ogMediaId"`
 	IsPinned       *bool   `json:"isPinned"`
