@@ -133,6 +133,51 @@ rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返�
 新评论一律 `pending`，审核通过后才出现在公开列表。限流 **3 次 / 10 分钟 / IP**，超限 `429 / 1005`；
 文章 `allow_comments = 0` 时 `403 / 1001`。
 
+### `POST /api/posts/{slug}/like` · `DELETE /api/posts/{slug}/like`
+
+点赞 / 取消点赞，两者都**幂等**：重复 POST 不会重复计数，没点过就 DELETE 也返回 200。
+限流 **10 次 / 分钟 / visitor**，超限 `429 / 1005`。
+
+```json
+{ "code": 0, "data": { "liked": true, "likeCount": 3 }, "msg": "操作成功" }
+```
+
+`liked` 是该 visitor 当前的状态；`likeCount` 每次都按 `likes` 表重算后写回 `posts.like_count`。
+文章不存在 → `404 / 1002`；已归档或已删除 → `410 / 1007`。
+
+### `GET /api/posts/{slug}/stats`
+
+访客态的阅读数与点赞数，供公开页**客户端异步**渲染（计数不进 SSR HTML）。
+
+```json
+{ "code": 0, "data": { "viewCount": 12, "likeCount": 3, "liked": false }, "msg": "操作成功" }
+```
+
+响应头是 `Cache-Control: no-store`（`liked` 依赖访客，不参与 ETag 协商）。
+
+### `POST /api/events/view`
+
+PV 打点。请求体：
+
+```json
+{ "path": "/posts/hello", "slug": "hello", "referrer": "https://example.com/x" }
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `path` | 必填，≤200 字符，以 `/` 开头 |
+| `slug` | 可空；命中已发布文章时计到该文，否则只计全站行 |
+| `referrer` | 可空；只取 host 落库（`page_views.referrer_host`） |
+
+```json
+{ "code": 0, "data": { "recorded": true, "viewCount": 13 }, "msg": "操作成功" }
+```
+
+- 同 visitor 同文章 **10 分钟内只 +1**：重复打点返回 `recorded: false`，计数不变。
+- `viewCount` 仅在 `slug` 命中已发布文章时返回，否则为 `null`。
+- 访客标识取请求头 `X-Visitor-Id`（前端 `localStorage` 生成，8–64 位 `[A-Za-z0-9_-]`）；
+  缺失或非法时按 `ip|ua` 兜底。公开接口**不 `Set-Cookie`**。
+
 ### `GET /api/site`
 
 站点级信息：`settings` 派生的时区 / 图片前缀 / 内容版本，加上公开计数。
@@ -369,6 +414,37 @@ rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返�
 - 状态变更会重算 `posts.comment_count`（approved 计数）并写 `audit_logs`。
 - `deleted` 是软删：记录保留，用 `status=deleted` 仍能查到。
 
+### 统计
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/stats/overview` | 首页看板：状态计数 + 今日/累计 PV·UV + 点赞 + Top 5 文章 |
+| `GET /api/admin/stats/daily?from=2026-09-20&to=2026-10-19` | 全站日粒度（`stats_daily.post_id=0`），缺省最近 30 天，范围 ≤366 天 |
+
+```json
+// GET /api/admin/stats/overview  →  data
+{
+  "posts": { "published": 3, "draft": 2, "scheduled": 0, "archived": 1, "deleted": 0 },
+  "comments": { "pending": 1, "approved": 4, "spam": 0 },
+  "media": { "ready": 5, "processing": 0, "failed": 0 },
+  "views": { "total": 120, "today": 8, "uvToday": 5 },
+  "likes": { "total": 9, "today": 2 },
+  "topPosts": [
+    { "id": 1, "slug": "hello", "title": "你好", "viewCount": 40, "likeCount": 3 }
+  ]
+}
+```
+
+```json
+// GET /api/admin/stats/daily?from=2026-10-01&to=2026-10-19  →  data
+{
+  "from": "2026-10-01", "to": "2026-10-19", "totalPv": 120, "totalUv": 60,
+  "list": [ { "date": "2026-10-19", "pv": 8, "uv": 5 } ]
+}
+```
+
+日期都是 `Asia/Shanghai` 的 `YYYY-MM-DD`；没有数据的日期不补零行（前端按区间补空点）。
+
 ## 内部组（8641，仅容器内或隧道）
 
 | 端点 | 说明 |
@@ -383,6 +459,5 @@ rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返�
 
 ## 尚未实现（后续模块）
 
-`/events/view`、`/attachments/*`、`/preview/{token}`、`/posts/{slug}/like`、`/stats/*`、`/jobs*`、
-`/audit-logs`、`/settings`、`/tags*`、`/series*`、`/links`、`/pages/*`、`/redirects*` 的管理端写接口、
-`POST /api/internal/revalidate`。
+`/attachments/*`、`/preview/{token}`、`/jobs*`、`/audit-logs`、`/settings`、`/tags*`、`/series*`、
+`/links`、`/pages/*`、`/redirects*` 的管理端写接口、`POST /api/internal/revalidate`。

@@ -13,6 +13,7 @@ type ServiceGroup struct {
 	Post    PostService
 	Public  PublicService
 	Setting SettingService
+	Stats   StatsService
 }
 
 // ServiceGroupApp 是全局服务聚合实例。

@@ -3,14 +3,15 @@ package public
 
 // ApiGroup 聚合公开接口。
 type ApiGroup struct {
-	Archive ArchiveApi
-	Comment CommentApi
-	Link    LinkApi
-	Page    PageApi
-	Post    PostApi
-	Series  SeriesApi
-	Site    SiteApi
-	Tag     TagApi
+	Archive     ArchiveApi
+	Comment     CommentApi
+	Interaction InteractionApi
+	Link        LinkApi
+	Page        PageApi
+	Post        PostApi
+	Series      SeriesApi
+	Site        SiteApi
+	Tag         TagApi
 	SystemApi
 }
 

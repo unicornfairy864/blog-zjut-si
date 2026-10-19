@@ -1,3 +1,5 @@
+import { visitorHeaders } from "@/lib/visitor";
+
 import { ApiError, apiFetch } from "./fetcher";
 
 /** 判断是否是指定 HTTP 状态的业务错误（404 走 notFound、410 已下线）。 */
@@ -96,6 +98,27 @@ export interface CommentCreateResult {
   id: number;
   status: string;
   createdAt: number;
+}
+
+/** 访客态的阅读数与点赞数（D12）；计数不进 SSR HTML，只由客户端异步取。 */
+export interface PostStats {
+  viewCount: number;
+  likeCount: number;
+  /** 当前访客是否点过赞；依赖访客，所以接口是 no-store、不参与 ETag。 */
+  liked: boolean;
+}
+
+/** 点赞 / 取消点赞后的权威状态。 */
+export interface LikeState {
+  liked: boolean;
+  likeCount: number;
+}
+
+/** PV 打点结果；`viewCount` 只在 `slug` 命中已发布文章时才有值。 */
+export interface ViewResult {
+  /** 同 visitor 同文章 10 分钟内只 +1，重复打点为 false。 */
+  recorded: boolean;
+  viewCount: number | null;
 }
 
 /** 统一分页出参。 */
@@ -256,6 +279,42 @@ export const publicApi = {
       `/api/posts/${encodeURIComponent(slug)}/comments`,
       { json: input },
     );
+  },
+
+  /**
+   * 访客态统计（D12）：阅读数与点赞数。
+   *
+   * 带 `X-Visitor-Id` 才能拿到正确的 `liked`；接口是 no-store，
+   * 所以每次都真的回源，SWR 的缓存由调用方按需决定。
+   */
+  postStats(slug: string) {
+    return apiFetch<PostStats>(`/api/posts/${encodeURIComponent(slug)}/stats`, {
+      headers: visitorHeaders(),
+    });
+  },
+
+  /** 点赞；幂等，已点过也返回 200。 */
+  like(slug: string) {
+    return apiFetch<LikeState>(`/api/posts/${encodeURIComponent(slug)}/like`, {
+      method: "POST",
+      headers: visitorHeaders(),
+    });
+  },
+
+  /** 取消点赞；幂等，没点过也返回 200。 */
+  unlike(slug: string) {
+    return apiFetch<LikeState>(`/api/posts/${encodeURIComponent(slug)}/like`, {
+      method: "DELETE",
+      headers: visitorHeaders(),
+    });
+  },
+
+  /** PV 打点；`slug` 命中已发布文章时同时计文章行与全站行。 */
+  recordView(input: { path: string; slug?: string; referrer?: string }) {
+    return apiFetch<ViewResult>("/api/events/view", {
+      json: input,
+      headers: visitorHeaders(),
+    });
   },
 
   /** 全文搜索。 */

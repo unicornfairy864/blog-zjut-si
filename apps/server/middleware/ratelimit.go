@@ -33,3 +33,10 @@ func NewPublicAPILimiter() *utils.KeyedLimiter {
 func NewCommentLimiter() *utils.KeyedLimiter {
 	return utils.NewKeyedLimiter(10*time.Minute/3, 3)
 }
+
+// NewLikeLimiter 构造点赞限流器：10 次 / 分钟 / visitor（agent.md §9）。
+//
+// 键用 middleware.VisitorKey（加盐 visitor_hash），不是 IP。
+func NewLikeLimiter() *utils.KeyedLimiter {
+	return utils.NewKeyedLimiter(time.Minute/10, 10)
+}

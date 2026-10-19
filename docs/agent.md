@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.9**（2026-10-19 D11 评论，见 §22）
+> 版本：**v1.10**（2026-10-19 D12 互动与统计，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -200,6 +200,8 @@ storage_driver  : local | cloudreve
 | 时间 | 全部出参为 Unix 秒整数 |
 | 缓存头 | 公开读接口必须带强 `ETag`（响应体哈希），支持 `If-None-Match → 304` |
 | CSRF | 所有 `/api/admin/*` 写操作必须校验 `X-CSRF-Token`；token 由 `GET /auth/me` 下发，值由会话令牌哈希派生（ADR 0003），会话期内稳定 |
+| 访客标识 | 公开写接口（点赞、PV 打点）读请求头 `X-Visitor-Id`：前端在 `localStorage` 生成一次的随机串，8–64 位 `[A-Za-z0-9_-]`；缺失或非法时服务端按 `ip\|ua` 兜底。**公开 HTML 与公开读接口一律不 `Set-Cookie`**（§17.1） |
+| 访客态读 | `liked` 这类依赖访客的读接口（`GET /posts/{slug}/stats`）用 `Cache-Control: no-store`，不参与 ETag；计数不进 SSR HTML（§17.1） |
 
 **错误码（数字码 + 常量名，禁止裸数字）**
 
@@ -224,7 +226,7 @@ storage_driver  : local | cloudreve
 
 **公开组（8640）**
 
-`GET /site` · `GET /posts` · `GET /posts/{slug}` · `GET /posts/{slug}/related` · `GET /posts/{slug}/comments` · `POST /posts/{slug}/comments` · `POST /posts/{slug}/like` · `GET /tags` · `GET /tags/{slug}` · `GET /archive` · `GET /series` · `GET /series/{slug}` · `GET /search?q` · `GET /links` · `GET /pages/{slug}` · `POST /events/view` · `GET /attachments/{id}/go` · `GET /preview/{token}`（`no-store`） · `GET /system/ping`（骨架探活）
+`GET /site` · `GET /posts` · `GET /posts/{slug}` · `GET /posts/{slug}/related` · `GET /posts/{slug}/comments` · `POST /posts/{slug}/comments` · `POST /posts/{slug}/like` · `DELETE /posts/{slug}/like` · `GET /posts/{slug}/stats` · `GET /tags` · `GET /tags/{slug}` · `GET /archive` · `GET /series` · `GET /series/{slug}` · `GET /search?q` · `GET /links` · `GET /pages/{slug}` · `POST /events/view` · `GET /attachments/{id}/go` · `GET /preview/{token}`（`no-store`） · `GET /system/ping`（骨架探活）
 
 **管理组（8641）**
 
@@ -233,6 +235,20 @@ storage_driver  : local | cloudreve
 **内部组（8641，仅容器内/隧道）**
 
 `POST /api/internal/revalidate` · `GET /api/internal/health` · `GET /healthz` · `GET /readyz`（DB 可查 + 磁盘 <85% + uploads 可写 + 队列积压 <100）
+
+**互动与统计口径（D12）**
+
+| 项 | 规则 |
+| --- | --- |
+| 点赞 | `likes` 主键 `(post_id, visitor_hash)`；`POST /posts/{slug}/like` 幂等（已赞不重复计数），`DELETE` 幂等取消；`posts.like_count` 每次变更后按 `SELECT COUNT(*) FROM likes WHERE post_id=?` 重算 |
+| 点赞限流 | **10 次 / 分钟 / visitor**，键为 `visitor_hash`（`utils.HashVisitor`），超限 `429 / 1005` |
+| PV 明细 | 每次 `POST /events/view` 写一行 `page_views`（`post_id` 可为 NULL、`path`、`visitor_hash`、`referrer_host`），明细保留 90 天由 `cleanup` 裁剪 |
+| PV 去重 | **同 visitor 同文章 10 分钟内只 +1**（去重键：文章页用 `post_id`，非文章页用 `path`）；重复打点返回 `recorded:false`，不写计数 |
+| 计数落点 | 计入时 `posts.view_count+1`，并同时 upsert `stats_daily` 的**文章行**与 `post_id=0` **全站行** |
+| UV | 不增量近似：按上海日期 `COUNT(DISTINCT visitor_hash)` 重算该日两行的 `uv` |
+| 切日 | `stats_daily.date` 为 `Asia/Shanghai` 的 `YYYY-MM-DD`；日界 = 当地 00:00 |
+| 展示 | 阅读数 / 点赞数一律**客户端异步**取（`GET /posts/{slug}/stats`），不进 SSR HTML（§17.1） |
+| 管理端 | `GET /stats/overview`（文章/评论/媒体状态计数、PV/UV、点赞、Top 5 文章）、`GET /stats/daily?from&to`（全站行，缺省最近 30 天，范围 ≤366 天） |
 
 ---
 
@@ -362,7 +378,9 @@ apps/web/
 | 数据 | 仅通过 `lib/api/`：公开页服务端调 `http://127.0.0.1:8640/api/*`；管理页浏览器调同源 `/api/admin/*` |
 | 状态 | 管理端用 **SWR**（`lib/swr` + `lib/hooks`）；不引入 Redux |
 | 表单 | `react-hook-form` + `zod`，schema 在 `lib/zod/`，与服务端校验规则一致 |
-| Markdown 编辑 | 受控 textarea + 防抖自动保存（30s 或失焦）+ `POST /posts/preview` 服务端预览 |
+| Markdown 编辑 | 受控 textarea + 防抖自动保存（30s 或失焦）+ `POST /posts/preview` 服务端预览；工具栏插入语法（粗体/链接/行内公式/块级公式/代码块/表格/图片） |
+| 编辑器预览 | 预览面板复用 `ui/post/PostContent`（与服务端同一渲染管线 + KaTeX 懒加载），**行内 `$x$` 与块级 `$$…$$` 都在预览里出公式**，不是原文 |
+| 编辑器图片 | 拖拽文件或粘贴截图到正文框即上传（`POST /api/admin/media`）并插入 Markdown；预览里的图片可点选成「图片框」，拖右下角手柄改宽度，写回 Markdown 的 `{width=N}` 属性（§11） |
 | 图片 | 不使用 `next/image`，统一 `<PostImage>` 输出 480/960/1600/2400 + blurhash 占位 |
 | 数学 | **客户端 KaTeX**：渲染管线输出 `<span class="math" data-tex="...">`，`<MathRender>` 懒加载替换；无公式页面不加载 |
 | 命名 | 文件 kebab-case、组件 PascalCase、类型 `XxxProps`；不用 `React.FC` |
@@ -449,6 +467,7 @@ apps/web/
 | 渲染 | 服务端 goldmark + chroma + bluemonday；`content_html` 落库，读路径不重复渲染 |
 | 数学 | goldmark 阶段只把 TeX 包成 `<span class="math" data-tex="{escaped}">`，**不在服务端渲染 KaTeX**；前端 `<MathRender>` 动态 import `katex` 并替换 innerHTML；无 JS 时显示 TeX 原文 |
 | 代码块 | 行号、复制按钮、文件名标签、语言高亮（diff 支持） |
+| 图片尺寸 | 允许 goldmark 属性语法 `![alt](src){width=480}`：编辑器拖拽写回 `width`（`height` 按原图比例由读取时补），读取时补 `srcset` 的一处（`DecorateContent`）**不覆盖**已有 `width` |
 | TOC | 从 `h2/h3` 提取，生成锚点，正文标题自动加 `id` |
 | 摘要 | 未填 `excerpt` 时取正文前 160 字纯文本 |
 | 阅读时长 | `ceil(word_count / 300)` 分钟；`word_count` = 中文字符数 + 英文单词数（中文按字符计） |
@@ -563,7 +582,7 @@ apps/web/
 | 在 8640 返回任何管理页面或管理 API | 破坏唯一安全边界 |
 | 把 Cloudreve 分享链接写进正文 | 链接会变，批量破图 |
 | 图片 URL 加 `?v=时间戳` | 摧毁浏览器缓存 |
-| 公开页面 `Set-Cookie` | 无意义且污染缓存层 |
+| 公开 HTML 与公开读接口 `Set-Cookie` | 无意义且污染缓存层；访客态写接口用 `X-Visitor-Id` 请求头（§5） |
 | 阅读数/点赞数 SSR 进 HTML | 无缓存层后依然要客户端异步，避免整页重渲染 |
 | 引入用户注册/登录/收藏 | 产品明确不要 |
 | 引入 TOTP / OAuth / SSO | 已裁定仅密码登录 |
@@ -707,6 +726,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.10 | 2026-10-19 | D12 互动与统计（M6）：公开 `POST|DELETE /posts/{slug}/like`（幂等、10 次/分钟/visitor）、`GET /posts/{slug}/stats`（`no-store`，访客态）、`POST /events/view`（PV 明细 + 同 visitor 同文章 10 分钟去重，UV 按上海日期 `COUNT(DISTINCT visitor_hash)` 重算，同时写 `stats_daily` 文章行与 `post_id=0` 全站行）；管理端 `GET /stats/overview` 与 `GET /stats/daily`；访客标识改为 `X-Visitor-Id` 请求头（缺失按 `ip|ua` 兜底），公开 HTML 与公开读接口不 `Set-Cookie`；§11 允许 `{width=…}` 图片尺寸属性；编辑器预览改用 `PostContent`（行内 `$x$` 出公式）、支持拖拽上传与图片框拖拽改宽 |
 | 1.9 | 2026-10-19 | D11 评论（M5）：公开 `GET|POST /posts/{slug}/comments`（嵌套固定两层、只出 approved、3 次/10 分钟/IP 限流）、管理端 `GET|PATCH /comments` 与 `POST /comments/bulk`；新评论一律 pending，`posts.comment_count` 只算 approved；`PublicPostDetail` 增 `allowComments`；§6 补评论状态机；管理端新增 `/admin/comments` 审核页 |
 | 1.8 | 2026-10-19 | D9–D10 实现修订：公开端补 `GET /site`、`/tags`、`/tags/{slug}`、`/archive`、`/series`、`/series/{slug}`、`/links`、`/pages/{slug}`、`/posts/{slug}/related`；列表项与详情增 `cover`（四档 `variants` + `origUrl`）与 `tags`，详情增 `prev`/`next`；正文图片在读取时补 `srcset`/`sizes`/`width`/`height`/`loading`；`links.status` 枚举定为 `active`/`hidden`（与 000001 默认值一致）；410 由 `apps/web/middleware.ts` 返回（App Router 页面无法自定义状态码）；web 端新增 `PostImage`/`PostContent`/`PostCard`/`PostToc`/`Pagination`、blurhash 解码与 KaTeX 懒加载 |
 | 1.7 | 2026-10-19 | D8 补充：`media_archive` 同时推四档变体（`cloudreve.archive_variants`，默认开）；新增 `cloudreve.public_base_url`，公开详情 `contentHtml` 在读取时给本站图片包上「查看原图」链接（`MediaItem.origUrl` 同步暴露）；明确图床「文件名规则」必须为 `{originname}` |

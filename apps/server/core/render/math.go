@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bytes"
 	"regexp"
 	"strconv"
 
@@ -33,6 +34,8 @@ func (n *mathNode) Dump(source []byte, level int) {
 var (
 	// mathPattern 匹配 $$...$$（块级）与 $...$（行内）；内容不含换行与 $，
 	// 行内公式要求首尾非空白，避免把 "$5 和 $10" 这类价格误判成公式。
+	//
+	// 跨行的 $$ 块（Typora 写法）由 wholeParagraphMath 在段落层面处理，不走这条正则。
 	mathPattern = regexp.MustCompile(`\$\$([^$\n]+?)\$\$|\$([^$\n\s](?:[^$\n]*[^$\n\s])?)\$`)
 )
 
@@ -47,10 +50,69 @@ func (mathTransformer) Transform(doc *ast.Document, reader text.Reader, _ parser
 			return ast.WalkContinue, nil
 		}
 		if paragraph, ok := node.(*ast.Paragraph); ok {
-			replaceMathInParagraph(paragraph, source)
+			replaceParagraphMath(paragraph, source)
 		}
 		return ast.WalkContinue, nil
 	})
+}
+
+// replaceParagraphMath 先判断整段是不是一个块级公式，不是再逐个子节点替换行内公式。
+//
+// Typora 写的跨行块公式
+//
+//	$$
+//	\int_0^1 x^2\,dx
+//	$$
+//
+// 会被 goldmark 拆成多个带软换行的 Text 子节点，任何单节点正则都匹配不到，
+// 所以只能在段落层面按源码区间判断（§11）。
+func replaceParagraphMath(parent *ast.Paragraph, source []byte) {
+	if tex, ok := wholeParagraphMath(parent, source); ok {
+		parent.RemoveChildren(parent)
+		parent.AppendChild(parent, &mathNode{tex: tex, block: true})
+		return
+	}
+	replaceMathInParagraph(parent, source)
+}
+
+// wholeParagraphMath 判断段落是否整体就是 `$$…$$`；是则返回去掉定界符并修剪过的 TeX。
+//
+// 只接受纯 Text 子节点：段落里混了强调、代码段等行内节点时不做整段替换，
+// 免得把正常正文吃掉。
+func wholeParagraphMath(parent *ast.Paragraph, source []byte) ([]byte, bool) {
+	var (
+		start, stop int
+		seen        bool
+	)
+	for child := parent.FirstChild(); child != nil; child = child.NextSibling() {
+		textNode, ok := child.(*ast.Text)
+		if !ok {
+			return nil, false
+		}
+		if !seen {
+			start, stop, seen = textNode.Segment.Start, textNode.Segment.Stop, true
+			continue
+		}
+		if textNode.Segment.Start < start {
+			start = textNode.Segment.Start
+		}
+		if textNode.Segment.Stop > stop {
+			stop = textNode.Segment.Stop
+		}
+	}
+	if !seen || stop <= start || stop > len(source) {
+		return nil, false
+	}
+
+	raw := bytes.TrimSpace(source[start:stop])
+	if len(raw) < 4 || !bytes.HasPrefix(raw, []byte("$$")) || !bytes.HasSuffix(raw, []byte("$$")) {
+		return nil, false
+	}
+	tex := bytes.TrimSpace(raw[2 : len(raw)-2])
+	if len(tex) == 0 || bytes.ContainsRune(tex, '$') {
+		return nil, false
+	}
+	return tex, true
 }
 
 // replaceMathInParagraph 只处理段落的直接 Text 子节点；代码块与代码段不参与。

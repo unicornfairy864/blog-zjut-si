@@ -105,3 +105,32 @@ pnpm lint && pnpm typecheck && pnpm test && pnpm build
 - **pnpm 安装脚本白名单**：pnpm 12 默认阻止依赖的 postinstall，白名单写在
   `apps/web/pnpm-workspace.yaml` 的 `allowBuilds`（当前放行 `esbuild`、`unrs-resolver`）。
   新增需要构建的依赖时必须在这里登记，否则 `pnpm install` 会以 `ERR_PNPM_IGNORED_BUILDS` 退出。
+
+## 10. 公开端访客标识
+
+公开端没有用户系统，公开 HTML 与公开读接口也不 `Set-Cookie`（`agent.md` §17.1），
+所以"同一个访客"由 `lib/visitor.ts` 在 `localStorage`（键 `zjut:vid`）里生成一次随机串，
+随写请求以 `X-Visitor-Id` 头带上：
+
+```ts
+// 好：lib/api/ 里的域名函数统一带访客头
+return apiFetch<PostStats>(`/api/posts/${slug}/stats`, { headers: visitorHeaders() });
+```
+
+- 读到的值必须是 8–64 位 `[A-Za-z0-9_-]`，否则重新生成（形状不对服务端会退回 `ip|ua`）。
+- SSR 或隐私模式抛错时返回空串：宁可这次请求不带标识，也不能让阅读页因为打点而崩。
+- 计数（阅读数 / 点赞数）只允许客户端异步取，**不得进 SSR HTML**；`liked` 这类访客态
+  读接口是 `no-store`，不参与 ETag。
+
+## 11. 编辑器（正文）
+
+- 工具栏（`ui/admin/editor-toolbar.tsx`）只做纯字符串计算：把"插入 / 包裹选区"翻译成
+  `MarkdownEdit{value,selectionStart,selectionEnd}`，写回表单与恢复光标由 `post-editor` 统一做，
+  工具栏不持有表单状态。
+- 预览（`ui/admin/post-preview.tsx`）复用 `ui/post/PostContent`，因此公式（行内 `$x$` 与
+  块级 `$$…$$`）与代码块复制按钮与服务端发布结果一致。
+- 图片：拖拽文件或粘贴截图到正文框即上传并插入 `![alt](url)`；预览里的图片可点选成图片框，
+  拖右下角手柄改宽度，松开时写回 `{width=N}`（`agent.md` §11「图片尺寸」）。
+  拖动过程只改内联样式，写回 Markdown 只发生在 `pointerup`，否则会每个 pointermove 都触发
+  一次 600ms 防抖预览。
+

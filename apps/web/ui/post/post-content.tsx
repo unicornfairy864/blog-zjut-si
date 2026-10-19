@@ -86,7 +86,11 @@ export function PostContent({ html, className }: PostContentProps) {
         // 内容来自服务端渲染 + bluemonday 白名单过滤，不是用户直传的 HTML（§9 / §11）。
         dangerouslySetInnerHTML={{ __html: html }}
       />
-      {hasMath ? <MathRender /> : null}
+      {/*
+        key={html}：编辑器预览会随输入替换整段 HTML，而 MathRender 只在挂载时渲染一次；
+        换 key 强制重挂载，新增的公式才会被 KaTeX 替换（公开页 html 固定，不受影响）。
+      */}
+      {hasMath ? <MathRender key={html} /> : null}
     </>
   );
 }

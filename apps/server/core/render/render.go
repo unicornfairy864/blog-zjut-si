@@ -65,8 +65,11 @@ func initRenderer() {
 	markdown = goldmark.New(
 		goldmark.WithExtensions(extension.GFM),
 		goldmark.WithParserOptions(
-			// 数学占位在解析后做 AST 变换，只影响普通段落。
-			parser.WithASTTransformers(util.Prioritized(mathTransformer{}, 100)),
+			// 数学占位与图片尺寸属性都在解析后做 AST 变换：先摘属性，再换公式。
+			parser.WithASTTransformers(
+				util.Prioritized(imageAttrTransformer{}, 50),
+				util.Prioritized(mathTransformer{}, 100),
+			),
 		),
 		goldmark.WithRenderer(renderer.NewRenderer(
 			renderer.WithNodeRenderers(

@@ -10,6 +10,7 @@ import { CommentSection } from "@/ui/post/comment-section";
 import { PostCard } from "@/ui/post/post-card";
 import { PostContent } from "@/ui/post/post-content";
 import { PostImage } from "@/ui/post/post-image";
+import { PostInteractions } from "@/ui/post/post-interactions";
 import { PostToc, extractToc } from "@/ui/post/post-toc";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,8 @@ export default async function PostDetailPage({
               <span>{post.readingTime} 分钟</span>
               <span>{post.wordCount} 字</span>
             </p>
+            {/* 阅读数 / 点赞数只在这里由客户端异步补上，不进 SSR HTML（§17.1）。 */}
+            <PostInteractions slug={post.slug} />
             {post.tags.length > 0 ? (
               <ul className="flex flex-wrap gap-2 text-xs">
                 {post.tags.map((tag) => (

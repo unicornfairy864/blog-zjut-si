@@ -51,6 +51,10 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.GET("/comments", v1.ApiGroupApp.Admin.Comment.List)
 			authorized.PATCH("/comments", v1.ApiGroupApp.Admin.Comment.Patch)
 			authorized.POST("/comments/bulk", v1.ApiGroupApp.Admin.Comment.Bulk)
+
+			// 统计看板（D12）：overview 与全站日粒度（§5）。
+			authorized.GET("/stats/overview", v1.ApiGroupApp.Admin.Stats.Overview)
+			authorized.GET("/stats/daily", v1.ApiGroupApp.Admin.Stats.Daily)
 		}
 	}
 

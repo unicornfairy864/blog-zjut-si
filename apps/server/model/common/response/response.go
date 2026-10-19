@@ -75,6 +75,15 @@ func OkWithETag(c *gin.Context, data any) {
 	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }
 
+// OkWithNoStore 输出禁止任何中间层缓存的成功响应（agent.md §5）。
+//
+// 用于依赖访客态的公开读接口（如 `GET /posts/{slug}/stats` 的 `liked`）：
+// 这类响应不能参与 ETag 协商，否则会把甲的点赞状态发给乙。
+func OkWithNoStore(c *gin.Context, data any) {
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, Body{Code: errs.Success, Data: data, Msg: okMessage})
+}
+
 // matchETag 判断 If-None-Match 是否命中（支持逗号分隔列表与 *）。
 func matchETag(header, etag string) bool {
 	header = strings.TrimSpace(header)

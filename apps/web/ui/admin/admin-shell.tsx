@@ -1,6 +1,13 @@
 "use client";
 
-import { LogOut } from "lucide-react";
+import {
+  BarChart3,
+  FileText,
+  Images,
+  LayoutDashboard,
+  LogOut,
+  MessageSquare,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -13,11 +20,13 @@ import { swrKeys } from "@/lib/swr/keys";
 import { cn } from "@/lib/utils";
 import { Button } from "@/ui/shadcn/button";
 
+/** 导航项；图标与文案一一对应，新增模块时在这里加一行即可。 */
 const NAV_ITEMS = [
-  { href: "/admin", label: "仪表盘" },
-  { href: "/admin/posts", label: "文章" },
-  { href: "/admin/media", label: "媒体" },
-  { href: "/admin/comments", label: "评论" },
+  { href: "/admin", label: "仪表盘", icon: LayoutDashboard },
+  { href: "/admin/posts", label: "文章", icon: FileText },
+  { href: "/admin/media", label: "媒体", icon: Images },
+  { href: "/admin/comments", label: "评论", icon: MessageSquare },
+  { href: "/admin/stats", label: "统计", icon: BarChart3 },
 ] as const;
 
 /** 管理端外壳：顶栏 + 导航 + 内容区（仅桌面宽度，agent.md §20）。 */
@@ -57,18 +66,20 @@ export function AdminShell({
                   item.href === "/admin"
                     ? pathname === "/admin"
                     : pathname.startsWith(item.href);
+                const Icon = item.icon;
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "rounded-md px-3 py-1.5 text-sm transition-colors",
+                      "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
                       active
                         ? "bg-muted font-medium text-foreground"
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >
+                    <Icon className="h-4 w-4" aria-hidden="true" />
                     {item.label}
                   </Link>
                 );

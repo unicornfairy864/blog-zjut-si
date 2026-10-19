@@ -448,3 +448,68 @@ XSS 顺带验一下：正文里带 `<script>alert(1)</script>` 的评论，入�
 
 限流是**进程内令牌桶**（`utils.NewKeyedLimiter`），重启容器即清零 —— 单实例部署够用，不是缺陷。
 
+---
+
+## 14. 互动与统计自测（D12 / G5 的点赞与 PV 部分）
+
+设已发布文章的 slug 为 `<slug>`，容器在跑。访客标识用请求头 `X-Visitor-Id`（8–64 位
+`[A-Za-z0-9_-]`）；**不带这个头时服务端按 `ip|ua` 兜底**，curl 连续打会被当成同一个访客。
+
+```bash
+V='X-Visitor-Id: test-visitor-0001'
+
+# 1) 点赞幂等：连点两次，likeCount 只 +1
+curl -s -X POST -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like   # {"liked":true,"likeCount":1}
+curl -s -X POST -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like   # 仍为 1
+
+# 2) 取消点赞同样幂等
+curl -s -X DELETE -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like # {"liked":false,"likeCount":0}
+curl -s -X DELETE -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like # 仍为 0
+
+# 3) 访客态读是 no-store（不能进任何缓存）
+curl -sI -H "$V" http://127.0.0.1:8640/api/posts/<slug>/stats | grep -i cache-control
+
+# 4) 点赞限流 10 次 / 分钟 / visitor：第 11 次 429 / 1005
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w "%{http_code} " -X POST -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like
+done; echo
+
+# 5) PV：同 visitor 10 分钟内只 +1，另一个 visitor 再 +1
+BODY='{"path":"/posts/<slug>","slug":"<slug>","referrer":"https://example.com/x"}'
+curl -s -X POST -H 'Content-Type: application/json' -H "$V" -d "$BODY" http://127.0.0.1:8640/api/events/view
+# 期望 {"recorded":true,"viewCount":1}
+curl -s -X POST -H 'Content-Type: application/json' -H "$V" -d "$BODY" http://127.0.0.1:8640/api/events/view
+# 期望 {"recorded":false,"viewCount":1}
+curl -s -X POST -H 'Content-Type: application/json' -H 'X-Visitor-Id: test-visitor-0002' \
+  -d "$BODY" http://127.0.0.1:8640/api/events/view
+# 期望 {"recorded":true,"viewCount":2}
+
+# 6) 非文章页只进全站行（viewCount 为 null）
+curl -s -X POST -H 'Content-Type: application/json' -H "$V" -d '{"path":"/"}' \
+  http://127.0.0.1:8640/api/events/view
+
+# 7) 打点字段校验：path 必须以 / 开头，否则 400 / 1003
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"no-slash"}' http://127.0.0.1:8640/api/events/view
+```
+
+落库口径用 sqlite3 对一下（**先停容器**再读，避免 WAL 半写）：
+
+```bash
+sqlite3 /data/blog/db/blog.db "
+SELECT date, post_id, pv, uv FROM stats_daily ORDER BY date, post_id;   -- 应同时有 post_id=0 与文章行
+SELECT post_id, path, referrer_host, length(visitor_hash) FROM page_views ORDER BY id DESC LIMIT 5;
+SELECT post_id, count(*) FROM likes GROUP BY post_id;"
+```
+
+管理端看板（隧道里 `http://localhost:8641/admin/stats`）应能对上：
+
+```bash
+curl -s http://127.0.0.1:8641/api/admin/stats/overview     # 需带会话 cookie
+curl -s 'http://127.0.0.1:8641/api/admin/stats/daily?from=2026-10-01&to=2026-10-19'
+```
+
+- `views.today` / `uvToday` 是 `stats_daily` 当天全站行；`uvToday` 是**去重访客数**（同一天同一 visitor 只算一个）。
+- 日期都是 `Asia/Shanghai`，容器时区无关；跨日验证可以把系统时间调过当地 00:00 再看 `date` 是否翻页。
+- 点赞限流与 PV 去重都在进程内，重启容器清零；`page_views` 明细由 `cleanup` 保留 90 天。
+

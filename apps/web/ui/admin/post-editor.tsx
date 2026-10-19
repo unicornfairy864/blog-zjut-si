@@ -8,6 +8,7 @@ import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
 import { ApiError } from "@/lib/api/fetcher";
+import { adminMediaApi } from "@/lib/api/media";
 import {
   adminPostApi,
   type PostDetail,
@@ -18,7 +19,13 @@ import { swrKeys } from "@/lib/swr/keys";
 import { cn, formatTime } from "@/lib/utils";
 import { postEditorSchema, type PostEditorValues } from "@/lib/zod/post";
 import { PostStatusBadge } from "@/ui/admin/post-status-badge";
+import {
+  EditorToolbar,
+  withImageWidth,
+  type MarkdownEdit,
+} from "@/ui/admin/editor-toolbar";
 import { MediaPicker } from "@/ui/admin/media-picker";
+import { PostPreviewPane } from "@/ui/admin/post-preview";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
 import { Button } from "@/ui/shadcn/button";
 import { Input } from "@/ui/shadcn/input";
@@ -40,6 +47,13 @@ const EMPTY_VALUES: PostEditorValues = {
 const AUTOSAVE_DELAY_MS = 30_000;
 /** 预览请求的防抖间隔，避免每个按键都打一次服务端。 */
 const PREVIEW_DEBOUNCE_MS = 600;
+/** 正文 textarea 的 id；工具栏与上传插入都要按 id 找到它读光标。 */
+const CONTENT_TEXTAREA_ID = "post-content";
+
+/** 正文 textarea 的 DOM 引用；插入语法与拖拽上传都依赖它的光标位置。 */
+function contentTextarea(): HTMLTextAreaElement | null {
+  return document.getElementById(CONTENT_TEXTAREA_ID) as HTMLTextAreaElement | null;
+}
 
 /** 实体 → 表单值。 */
 function toFormValues(post: PostDetail): PostEditorValues {
@@ -77,7 +91,10 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * 文章编辑器（D5）：Markdown 长文、30 秒防抖自动保存、服务端预览。
+ * 文章编辑器（D5）：Markdown 长文、工具栏插入语法、30 秒防抖自动保存、服务端预览。
+ *
+ * 预览走 `PostPreviewPane`（内部复用 `PostContent`，与服务端发布同一条渲染管线）；
+ * 正文支持拖拽/粘贴图片上传，预览里的图片可以点选并拖拽改宽度（写回 `{width=N}`）。
  *
  * 新建与编辑共用；首次保存会创建草稿，并用 history.replaceState 换地址，
  * 避免 Next 重新挂载组件丢掉未保存内容。
@@ -97,6 +114,9 @@ export function PostEditor({ postId }: { postId: number | null }) {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [createRedirect, setCreateRedirect] = useState(true);
   const [savedSlug, setSavedSlug] = useState("");
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const { register, reset, setValue, trigger, getValues, watch, formState } =
     useForm<PostEditorValues>({
@@ -112,6 +132,8 @@ export function PostEditor({ postId }: { postId: number | null }) {
   redirectRef.current = createRedirect;
   const savingRef = useRef(false);
   const loadedRef = useRef<number | null>(null);
+  // 工具栏的图片按钮要展开下方这块 <details>，用 ref 比受控 state 更少牵扯渲染。
+  const mediaDetailsRef = useRef<HTMLDetailsElement | null>(null);
 
   const { data, error, isLoading } = useSWR<PostDetail, ApiError>(
     currentId ? swrKeys.adminPost(currentId) : null,
@@ -207,25 +229,102 @@ export function PostEditor({ postId }: { postId: number | null }) {
     }
   };
 
-  // 把媒体库选中的图片 Markdown 插到光标处（D7：图文混排）。
-  const insertMarkdown = (snippet: string) => {
-    const textarea = document.getElementById(
-      "post-content",
-    ) as HTMLTextAreaElement | null;
-    const current = getValues("contentMd");
-    const start = textarea?.selectionStart ?? current.length;
-    const end = textarea?.selectionEnd ?? current.length;
-    const next = `${current.slice(0, start)}${snippet}${current.slice(end)}`;
-
-    setValue("contentMd", next, { shouldDirty: true });
+  // 把 Markdown 编辑写进表单，并把光标/选区恢复到插入内容上（工具栏、上传、媒体库共用）。
+  const applyEdit = (edit: MarkdownEdit) => {
+    setValue("contentMd", edit.value, { shouldDirty: true });
+    const textarea = contentTextarea();
+    // 等 react-hook-form 把新值写进 textarea 之后再设选区，否则会被覆盖。
     requestAnimationFrame(() => {
       if (!textarea) {
         return;
       }
       textarea.focus();
-      const position = start + snippet.length;
-      textarea.setSelectionRange(position, position);
+      textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
     });
+  };
+
+  // 在光标处插入一段 Markdown（替换选区），用于媒体库选图与拖拽/粘贴上传。
+  const insertMarkdown = (snippet: string) => {
+    const textarea = contentTextarea();
+    const current = getValues("contentMd");
+    const start = textarea?.selectionStart ?? current.length;
+    const end = textarea?.selectionEnd ?? current.length;
+    const position = start + snippet.length;
+    applyEdit({
+      value: `${current.slice(0, start)}${snippet}${current.slice(end)}`,
+      selectionStart: position,
+      selectionEnd: position,
+    });
+  };
+
+  // 工具栏的图片按钮：展开下方的媒体库选择器并滚到可见处。
+  const openMediaPicker = () => {
+    const details = mediaDetailsRef.current;
+    if (!details) {
+      return;
+    }
+    details.open = true;
+    details.scrollIntoView({ block: "nearest" });
+  };
+
+  /**
+   * 拖入或粘贴的图片：逐个上传，成功后按顺序把 `![alt](url)` 插到光标处。
+   *
+   * 插入点在上传开始时就固定：上传是异步的，等回来再读光标会被用户随后的点击带跑。
+   * 正文没被聚焦过时（例如直接往框里拖文件）追加到末尾，避免插到第 0 个字符。
+   */
+  async function uploadImages(files: File[]) {
+    const images = files.filter((file) => file.type.startsWith("image/"));
+    if (images.length === 0) {
+      return;
+    }
+
+    const textarea = contentTextarea();
+    const value = getValues("contentMd");
+    const focused = textarea !== null && document.activeElement === textarea;
+    let cursor = focused ? textarea.selectionStart : value.length;
+    const selectionEnd = focused ? textarea.selectionEnd : value.length;
+
+    setUploadingImages(true);
+    setUploadError(null);
+    try {
+      for (const [index, file] of images.entries()) {
+        const item = await adminMediaApi.upload(file);
+        // alt 取去掉扩展名的文件名：正文里比 "image" 之类更可读。
+        const alt = file.name.replace(/\.[^.]+$/, "") || "图片";
+        const snippet = `![${alt}](${item.url})`;
+
+        const current = getValues("contentMd");
+        const from = Math.min(cursor, current.length);
+        // 第一张顺带替换掉原选区，后续几张只插在上一个片段之后，顺序与拖入一致。
+        const to =
+          index === 0 ? Math.min(Math.max(selectionEnd, from), current.length) : from;
+        const next = `${current.slice(0, from)}${snippet}${current.slice(to)}`;
+        cursor = from + snippet.length;
+        applyEdit({
+          value: next,
+          selectionStart: cursor,
+          selectionEnd: cursor,
+        });
+      }
+    } catch (caught) {
+      setUploadError(errorMessage(caught, "图片上传失败，请稍后重试"));
+    } finally {
+      setUploadingImages(false);
+    }
+  }
+
+  /**
+   * 预览里拖完手柄后把宽度写回正文（agent.md §11「图片尺寸」）。
+   *
+   * 只在松开手柄时调用：拖动过程只改内联样式，否则会不停触发服务端预览。
+   */
+  const handleImageWidth = (index: number, width: number) => {
+    const current = getValues("contentMd");
+    const next = withImageWidth(current, index, width);
+    if (next !== current) {
+      setValue("contentMd", next, { shouldDirty: true });
+    }
   };
 
   // 预览：打开面板后按 600ms 防抖请求服务端，与发布共用同一渲染管线。
@@ -538,22 +637,78 @@ export function PostEditor({ postId }: { postId: number | null }) {
         <div className={cn("grid gap-6", previewOpen && "lg:grid-cols-2")}>
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-4">
-              <Label htmlFor="post-content">正文（Markdown）</Label>
+              <Label htmlFor={CONTENT_TEXTAREA_ID}>正文（Markdown）</Label>
               <span className="text-xs text-muted-foreground">
                 {values.contentMd.length} 字符
               </span>
             </div>
-            <Textarea
-              id="post-content"
-              className="min-h-[60vh] font-mono text-sm leading-6"
-              placeholder="# 标题&#10;&#10;开始写正文，支持 GFM 表格、任务列表与代码块。"
-              {...register("contentMd", { onBlur: saveOnBlur })}
+            <EditorToolbar
+              textareaId={CONTENT_TEXTAREA_ID}
+              value={values.contentMd}
+              onInsert={applyEdit}
+              onPickImage={openMediaPicker}
+              disabled={uploadingImages}
             />
-            <details className="rounded-lg border border-border p-3">
+            {uploadingImages ? (
+              <p aria-live="polite" className="text-xs text-muted-foreground">
+                图片上传中…
+              </p>
+            ) : null}
+            {uploadError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{uploadError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <Textarea
+              id={CONTENT_TEXTAREA_ID}
+              className={cn(
+                "min-h-[60vh] font-mono text-sm leading-6",
+                // 拖拽高亮用 ring：只改边框色会让 60vh 的框体在拖动时轻微跳动。
+                dragActive && "border-primary ring-2 ring-ring",
+              )}
+              placeholder="# 标题&#10;&#10;开始写正文，支持 GFM 表格、任务列表与代码块；图片可直接拖进来或粘贴。"
+              {...register("contentMd", { onBlur: saveOnBlur })}
+              onDragOver={(event) => {
+                // 只接管文件拖拽，普通文本拖放交给浏览器默认行为。
+                if (!event.dataTransfer.types.includes("Files")) {
+                  return;
+                }
+                event.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={(event) => {
+                const files = Array.from(event.dataTransfer.files);
+                if (files.length === 0) {
+                  return;
+                }
+                event.preventDefault();
+                setDragActive(false);
+                void uploadImages(files);
+              }}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files);
+                // 剪贴板里没有图片时完全不拦截，普通文本粘贴照常。
+                if (!files.some((file) => file.type.startsWith("image/"))) {
+                  return;
+                }
+                event.preventDefault();
+                void uploadImages(files);
+              }}
+            />
+            <details
+              ref={mediaDetailsRef}
+              className="rounded-lg border border-border p-3"
+            >
               <summary className="cursor-pointer text-sm font-medium">插入图片</summary>
               <div className="mt-3">
                 <MediaPicker
-                  onPick={(markdown) => insertMarkdown(`\n\n${markdown}\n\n`)}
+                  onPick={(markdown) => {
+                    insertMarkdown(`\n\n${markdown}\n\n`);
+                    if (mediaDetailsRef.current) {
+                      mediaDetailsRef.current.open = false;
+                    }
+                  }}
                 />
               </div>
             </details>
@@ -580,11 +735,16 @@ export function PostEditor({ postId }: { postId: number | null }) {
                 </Alert>
               ) : null}
               {preview ? (
-                <article
-                  className="prose-blog max-w-none"
-                  // HTML 已由服务端 goldmark + bluemonday 消毒（agent.md §9）
-                  dangerouslySetInnerHTML={{ __html: preview.html }}
+                <PostPreviewPane
+                  html={preview.html}
+                  onImageWidth={handleImageWidth}
                 />
+              ) : null}
+              {preview ? (
+                <p className="mt-4 text-xs text-muted-foreground">
+                  点击图片选中，拖右下角手柄改宽度；宽度按 10px 取整后写回正文的{" "}
+                  <code>{"{width=N}"}</code>。
+                </p>
               ) : null}
               {preview?.excerpt ? (
                 <p className="mt-6 border-t border-border pt-3 text-xs text-muted-foreground">

@@ -7,6 +7,7 @@ type ApiGroup struct {
 	Comment CommentApi
 	Media   MediaApi
 	Post    PostApi
+	Stats   StatsApi
 }
 
 // Group 是管理端接口聚合实例。
