@@ -291,6 +291,12 @@ func (s PostService) Update(id int64, in PostUpdateInput, actor PostActor) (*mod
 				return err
 			}
 		}
+		// 退回草稿要撤掉待执行的定时任务，否则到点会把它又发出去（§5）。
+		if statusChanged && post.Status == model.PostStatusDraft {
+			if err := cancelScheduledJobs(tx, post.ID); err != nil {
+				return err
+			}
+		}
 		if err := model.UpdatePostFields(tx, post.ID, fields); err != nil {
 			return err
 		}
@@ -339,6 +345,10 @@ func (s PostService) Delete(id int64, actor PostActor) error {
 }
 
 // Publish 把草稿发布上线：写版本快照、重算渲染与计数、revision+1（§6）。
+//
+// 与定时发布共用 publishInTx；手动发布还会撤掉可能存在的定时任务，避免到点重复发布。
+// 已发布文章只有在**内容相对上一版本有变化**时才允许再发布——那等于"为线上改动记一个新版本"，
+// 内容没变仍按 §5 的「重复发布」返回 409，这样版本历史与回滚对线上改字同样有效。
 func (s PostService) Publish(id int64, note string, actor PostActor) (*model.Post, error) {
 	var updated *model.Post
 	if err := global.DB.Transaction(func(tx *gorm.DB) error {
@@ -346,61 +356,33 @@ func (s PostService) Publish(id int64, note string, actor PostActor) (*model.Pos
 		if err != nil {
 			return err
 		}
-
-		switch post.Status {
-		case model.PostStatusPublished:
-			return errs.New(errs.ErrorConflict, "文章已处于发布状态")
-		case model.PostStatusArchived:
+		if post.Status == model.PostStatusArchived {
 			return errs.New(errs.ErrorConflict, "已归档文章请先取消归档再发布")
 		}
 
 		now := dbtime.Now()
-		rendered := render.Markdown(post.ContentMD)
-		revisionNo := post.Revision + 1
-
-		if err := model.CreatePostRevision(tx, &model.PostRevision{
-			PostID:      post.ID,
-			RevisionNo:  revisionNo,
-			Title:       post.Title,
-			ContentMD:   post.ContentMD,
-			ContentHTML: rendered.HTML,
-			Note:        strings.TrimSpace(note),
-			CreatedAt:   now,
-		}); err != nil {
-			return err
+		at := now
+		if post.Status == model.PostStatusPublished {
+			latest, err := model.ListPostRevisions(tx, post.ID, 1)
+			if err != nil {
+				return err
+			}
+			if len(latest) > 0 && latest[0].Title == post.Title && latest[0].ContentMD == post.ContentMD {
+				return errs.New(errs.ErrorConflict, "文章已处于发布状态")
+			}
+			// 保留原发布时间：重新发布只是补一个版本，不该把文章顶到列表最前。
+			if post.PublishedAt != nil {
+				at = *post.PublishedAt
+			}
 		}
 
-		fields := map[string]any{
-			"status":       model.PostStatusPublished,
-			"published_at": now,
-			"content_html": rendered.HTML,
-			"content_text": rendered.Text,
-			"word_count":   rendered.WordCount,
-			"reading_time": rendered.ReadingTime,
-			"excerpt":      excerptOrAuto(post.Excerpt, rendered.Text),
-			"revision":     revisionNo,
-			"updated_at":   now,
-		}
-		if err := model.UpdatePostFields(tx, post.ID, fields); err != nil {
+		if err := cancelScheduledJobs(tx, post.ID); err != nil {
 			return err
 		}
-		if err := model.PrunePostRevisions(tx, post.ID, postRevisionKeep); err != nil {
-			return err
-		}
-		if err := ServiceGroupApp.Audit.WriteTx(tx, AuditInput{
-			AdminID:    actor.AdminID,
-			Action:     AuditActionPostPublish,
-			TargetType: "post",
-			TargetID:   strconv.FormatInt(post.ID, 10),
-			Meta:       map[string]any{"revision": revisionNo},
-			IP:         actor.IP,
-		}); err != nil {
+		if err := publishInTx(tx, post, note, at, now, actor); err != nil {
 			return err
 		}
 
-		post.Status = model.PostStatusPublished
-		post.PublishedAt = &now
-		post.Revision = revisionNo
 		updated = post
 		return nil
 	}); err != nil {
@@ -412,7 +394,9 @@ func (s PostService) Publish(id int64, note string, actor PostActor) (*model.Pos
 	return s.Get(updated.ID)
 }
 
-// Unpublish 把已发布/已归档文章退回草稿，并清空发布时间。
+// Unpublish 把已发布/已归档/已定时文章退回草稿，并清空发布时间。
+//
+// 定时文章退回草稿时，待执行的 publish_scheduled 任务一并撤掉（§5）。
 func (s PostService) Unpublish(id int64, actor PostActor) (*model.Post, error) {
 	var updated *model.Post
 	if err := global.DB.Transaction(func(tx *gorm.DB) error {
@@ -424,6 +408,9 @@ func (s PostService) Unpublish(id int64, actor PostActor) (*model.Post, error) {
 			return errs.New(errs.ErrorConflict, "文章已是草稿状态")
 		}
 
+		if err := cancelScheduledJobs(tx, post.ID); err != nil {
+			return err
+		}
 		now := dbtime.Now()
 		if err := model.UpdatePostFields(tx, post.ID, map[string]any{
 			"status":       model.PostStatusDraft,

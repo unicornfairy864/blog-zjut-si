@@ -4,6 +4,8 @@ export interface PaginationProps {
   page: number;
   pageSize: number;
   total: number;
+  /** 计数单位；公开文章列表用「篇」，管理端列表用「条」。 */
+  unit?: string;
   /** 生成某一页的链接；由调用方决定要不要带 tag / q 之类的查询参数。 */
   hrefFor: (page: number) => string;
 }
@@ -13,6 +15,7 @@ export function Pagination({
   page,
   pageSize,
   total,
+  unit = "篇",
   hrefFor,
 }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
@@ -41,7 +44,7 @@ export function Pagination({
       )}
 
       <span className="text-xs text-muted-foreground">
-        第 {page} / {totalPages} 页 · 共 {total} 篇
+        第 {page} / {totalPages} 页 · 共 {total} {unit}
       </span>
 
       {next ? (

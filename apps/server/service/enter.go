@@ -8,12 +8,15 @@ type ServiceGroup struct {
 	Auth    AuthService
 	Audit   AuditService
 	Comment CommentService
+	Content ContentService
 	Health  HealthService
 	Media   MediaService
+	Ops     OpsService
 	Post    PostService
 	Public  PublicService
 	Setting SettingService
 	Stats   StatsService
+	Task    TaskService
 }
 
 // ServiceGroupApp 是全局服务聚合实例。

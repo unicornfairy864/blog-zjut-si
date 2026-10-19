@@ -26,6 +26,32 @@ const (
 	AuditActionPostPublish   = "post.publish"
 	AuditActionPostUnpublish = "post.unpublish"
 	AuditActionPostArchive   = "post.archive"
+	AuditActionPostSchedule  = "post.schedule"
+	AuditActionPostRestore   = "post.restore"
+
+	AuditActionPreviewCreate = "preview.create"
+	AuditActionPreviewDelete = "preview.delete"
+
+	AuditActionTagCreate      = "tag.create"
+	AuditActionTagUpdate      = "tag.update"
+	AuditActionTagDelete      = "tag.delete"
+	AuditActionSeriesCreate   = "series.create"
+	AuditActionSeriesUpdate   = "series.update"
+	AuditActionSeriesDelete   = "series.delete"
+	AuditActionLinkCreate     = "link.create"
+	AuditActionLinkUpdate     = "link.update"
+	AuditActionLinkDelete     = "link.delete"
+	AuditActionRedirectCreate = "redirect.create"
+	AuditActionRedirectUpdate = "redirect.update"
+	AuditActionRedirectDelete = "redirect.delete"
+
+	AuditActionAttachmentCreate = "attachment.create"
+	AuditActionAttachmentUpdate = "attachment.update"
+	AuditActionAttachmentDelete = "attachment.delete"
+
+	AuditActionSettingsUpdate = "settings.update"
+	AuditActionJobEnqueue     = "job.enqueue"
+	AuditActionJobRetry       = "job.retry"
 
 	AuditActionMediaUpload  = "media.upload"
 	AuditActionMediaDelete  = "media.delete"

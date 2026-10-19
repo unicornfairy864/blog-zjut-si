@@ -5,9 +5,11 @@ import (
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/api/v1"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/core/edge"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/global"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/middleware"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/errs"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/response"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/service"
 )
 
 // NewPublicEngine 构建 8640 公开边缘。
@@ -45,6 +47,10 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 		api.GET("/posts/:slug/stats", v1.ApiGroupApp.Public.Interaction.Stats)
 		api.POST("/events/view", v1.ApiGroupApp.Public.Interaction.View)
 
+		// 一次性预览链接（D13）与附件跳转（D14）：都带 no-store。
+		api.GET("/preview/:token", v1.ApiGroupApp.Public.Preview.Detail)
+		api.GET("/attachments/:id/go", v1.ApiGroupApp.Public.Attachment.Go)
+
 		// 公开只读聚合（D9–D10）：站点信息、标签、归档、系列、友链与静态页。
 		api.GET("/site", v1.ApiGroupApp.Public.Site.Detail)
 		api.GET("/tags", v1.ApiGroupApp.Public.Tag.List)
@@ -57,8 +63,17 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 	}
 
 	engine.NoRoute(func(c *gin.Context) {
-		if edge.IsPrivatePath(c.Request.URL.Path) || edge.IsAPIPath(c.Request.URL.Path) {
+		path := c.Request.URL.Path
+		if edge.IsPrivatePath(path) || edge.IsAPIPath(path) {
 			response.FailWithDetailed(c, errs.ErrorNotFound, nil, "页面不存在")
+			return
+		}
+		// 改过 slug 的老链接：命中 redirects 就在边缘跳走，不落到 Next 的 404（§5）。
+		if redirect, err := service.ServiceGroupApp.Content.RedirectFor(path); err != nil {
+			global.Log.Warn("查询跳转失败", "path", path, "err", err)
+		} else if redirect != nil {
+			c.Header("Cache-Control", "no-cache")
+			c.Redirect(redirect.Status, redirect.ToPath)
 			return
 		}
 		proxy.Serve(c)

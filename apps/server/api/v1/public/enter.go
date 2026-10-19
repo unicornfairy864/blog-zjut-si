@@ -4,11 +4,13 @@ package public
 // ApiGroup 聚合公开接口。
 type ApiGroup struct {
 	Archive     ArchiveApi
+	Attachment  AttachmentApi
 	Comment     CommentApi
 	Interaction InteractionApi
 	Link        LinkApi
 	Page        PageApi
 	Post        PostApi
+	Preview     PreviewApi
 	Series      SeriesApi
 	Site        SiteApi
 	Tag         TagApi

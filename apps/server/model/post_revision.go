@@ -39,6 +39,16 @@ func ListPostRevisions(db *gorm.DB, postID int64, limit int) ([]PostRevision, er
 	return revisions, nil
 }
 
+// FindPostRevision 按 (post_id, id) 取一条版本快照；不属于该文章时按不存在处理。
+func FindPostRevision(db *gorm.DB, postID, revisionID int64) (*PostRevision, error) {
+	var revision PostRevision
+	err := db.Where("id = ? AND post_id = ?", revisionID, postID).Take(&revision).Error
+	if err != nil {
+		return nil, wrapErr(err)
+	}
+	return &revision, nil
+}
+
 // CountPostRevisions 统计文章的版本条数。
 func CountPostRevisions(db *gorm.DB, postID int64) (int64, error) {
 	var n int64
@@ -46,16 +56,17 @@ func CountPostRevisions(db *gorm.DB, postID int64) (int64, error) {
 	return n, err
 }
 
-// PrunePostRevisions 只保留最近 keep 条版本，其余物理删除。
-func PrunePostRevisions(db *gorm.DB, postID int64, keep int) error {
+// PrunePostRevisions 只保留最近 keep 条版本，其余物理删除；返回删掉的条数。
+func PrunePostRevisions(db *gorm.DB, postID int64, keep int) (int64, error) {
 	if keep < 1 {
-		return nil
+		return 0, nil
 	}
 	sub := db.Model(&PostRevision{}).
 		Select("id").
 		Where("post_id = ?", postID).
 		Order("revision_no DESC").
 		Limit(keep)
-	return db.Where("post_id = ? AND id NOT IN (?)", postID, sub).
-		Delete(&PostRevision{}).Error
+	result := db.Where("post_id = ? AND id NOT IN (?)", postID, sub).
+		Delete(&PostRevision{})
+	return result.RowsAffected, result.Error
 }

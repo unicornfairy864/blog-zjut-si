@@ -135,6 +135,7 @@ docker compose start blog
 | `BLOG_AUTH_COOKIE_SECURE` | `false` | 隧道走 http，保持 false |
 | `BLOG_LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 | `BLOG_TASK_ENABLED` | `true` | 调度器开关 |
+| `BLOG_BACKUP_DIR` | `./data/backup` | `backup` 任务的落点：`blog-YYYYMMDD.db` + `uploads-YYYYMMDD/` |
 | `BLOG_CLOUDREVE_ENABLED` | `false` | 是否启用归档（原图 + 四档变体） |
 | `BLOG_CLOUDREVE_WEBDAV_URL` | 空 | Cloudreve WebDAV 地址（如 `https://pan.example.com/dav`） |
 | `BLOG_CLOUDREVE_USERNAME` / `BLOG_CLOUDREVE_PASSWORD` | 空 | WebDAV 账号；口令含 `$` 时在 `.env` 写成 `$$` |
@@ -512,4 +513,136 @@ curl -s 'http://127.0.0.1:8641/api/admin/stats/daily?from=2026-10-01&to=2026-10-
 - `views.today` / `uvToday` 是 `stats_daily` 当天全站行；`uvToday` 是**去重访客数**（同一天同一 visitor 只算一个）。
 - 日期都是 `Asia/Shanghai`，容器时区无关；跨日验证可以把系统时间调过当地 00:00 再看 `date` 是否翻页。
 - 点赞限流与 PV 去重都在进程内，重启容器清零；`page_views` 明细由 `cleanup` 保留 90 天。
+
+---
+
+## 15. 发布控制自测（D13 / G6）
+
+隧道里打开 `http://localhost:8641/admin/posts/{id}`，或直接用接口（记得带 `X-CSRF-Token`）。
+
+```bash
+# 1) 定时发布：publishedAt 必须是未来时间
+NOW=$(date +%s); AT=$((NOW + 180))
+curl -s -X POST http://127.0.0.1:8641/api/admin/posts/<id>/schedule \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \
+  -d "{\"publishedAt\":$AT,\"note\":\"定时\"}"          # status=scheduled，published_at=$AT
+curl -s 'http://127.0.0.1:8641/api/admin/jobs?status=pending'   # 应有一条 publish_scheduled，run_at=$AT
+curl -s -X POST ... -d "{\"publishedAt\":$NOW}"                 # 过去时间 → 400/1003 field=publishedAt
+
+# 2) 到点生效（误差 <90s）：等 3 分钟后再看
+sleep 200
+curl -s http://127.0.0.1:8640/api/posts/<slug> | head -c 200    # 200：已发布
+curl -s 'http://127.0.0.1:8641/api/admin/jobs?status=done'      # publish_scheduled 已 done
+
+# 3) 取消定时：重新排一条，再 unpublish，等到点后文章仍是草稿
+#    （unpublish / PATCH 回 draft 都会撤掉待执行任务；jobs 里该条会消失）
+
+# 4) 版本回滚：改正文 → 发布 → 回滚到上一条 revision
+curl -s http://127.0.0.1:8641/api/admin/posts/<id>/revisions    # data.list[]，按 revisionNo 倒序
+curl -s -X POST http://127.0.0.1:8641/api/admin/posts/<id>/revisions/<rid>/restore \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{}'
+# 期望：正文回到旧版本，且 revision 号 +1（历史不被改写，列表多出一条「回滚到版本 N」）
+
+# 5) 预览链接：一次性、24h
+curl -s -X POST http://127.0.0.1:8641/api/admin/posts/<id>/preview-link \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{}'
+# → {"token":"…","url":"/preview/…","expiresAt":…}
+curl -s -i http://127.0.0.1:8640/api/preview/<token> | head -3   # 200 + Cache-Control: no-store
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8640/api/preview/<token>   # 410（已使用）
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8640/api/preview/deadbeef # 404（形状不对）
+# 隧道里点开预览地址也能看：http://localhost:8641/preview/<token>（8641 也转 /preview*）
+# 再次生成会作废该文旧的未使用链接
+```
+
+`410 / 2006` 的另一种构造方式（不用真等 24h）：停容器后
+
+```bash
+sqlite3 /data/blog/db/blog.db "UPDATE preview_tokens SET expires_at = strftime('%s','now') - 10;"
+```
+
+## 16. 清理与备份自测（D13 / G6 的 cleanup 断言）
+
+周期任务按站点时区在 03:00（backup）/ 04:00（cleanup）/ 周一 05:00（link_check）自动入队；
+**判据是 jobs 表当天是否已有同类型记录**，所以重启不会重复跑，也不会漏跑。
+自测时不用等时刻点，直接手动投递：
+
+```bash
+# 手动投递（白名单只有 cleanup / backup / link_check）
+curl -s -X POST http://127.0.0.1:8641/api/admin/jobs \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"type":"cleanup"}'
+```
+
+先构造"过期数据"，再投递 `cleanup`，然后核对被删掉（**先停容器**再改库，避免 WAL 半写）：
+
+```bash
+sqlite3 /data/blog/db/blog.db <<'SQL'
+-- 1) 回收站里 31 天前的文章
+UPDATE posts SET deleted_at = strftime('%s','now') - 31*86400 WHERE id = <某篇>;
+-- 2) 91 天前的访问明细
+UPDATE page_views SET created_at = strftime('%s','now') - 91*86400 WHERE id = (SELECT max(id) FROM page_views);
+-- 3) 已过期的会话与预览链接
+UPDATE sessions SET expires_at = strftime('%s','now') - 10;
+UPDATE preview_tokens SET expires_at = strftime('%s','now') - 10;
+-- 4) 归档满 31 天的图片（本地原图应被删，变体仍在）
+UPDATE media SET orig_archived = 1, orig_archived_at = strftime('%s','now') - 31*86400 WHERE id = <某个 ready 的图>;
+SQL
+docker compose start
+```
+
+投递 cleanup 后（`jobs` 里能看到该条的 `attempts`/`status`）：
+
+```bash
+sqlite3 /data/blog/db/blog.db "
+SELECT count(*) FROM posts WHERE id = <某篇>;                 -- 0（已物理删除）
+SELECT count(*) FROM page_views WHERE created_at < strftime('%s','now') - 90*86400;  -- 0
+SELECT count(*) FROM sessions WHERE expires_at < strftime('%s','now');               -- 0
+SELECT count(*) FROM preview_tokens WHERE expires_at < strftime('%s','now');         -- 0"
+ls /data/blog/uploads/<sha 前两位>/<sha>/original.*           # 已删除；480/960/1600/2400.webp 仍在
+```
+
+备份（`backup` 任务，落点 `BLOG_BACKUP_DIR`，默认 `./data/backup`）：
+
+```bash
+curl -s -X POST http://127.0.0.1:8641/api/admin/jobs \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"type":"backup"}'
+ls -lh /data/blog/backup/            # blog-YYYYMMDD.db + uploads-YYYYMMDD/（硬链接快照）
+```
+
+- 库保留 30 天、图片快照保留 90 天，超期由下一次 `backup` 自己清掉。
+- `VACUUM INTO` 出来的 `.db` 可直接 `sqlite3 blog-YYYYMMDD.db .tables` 验证；恢复步骤见 §9。
+
+---
+
+## 17. 内容管理自测（D14）
+
+管理端（隧道 `http://localhost:8641`）逐页过一遍：`/admin/tags`、`/admin/series`、`/admin/links`、
+`/admin/redirects`、`/admin/attachments`、`/admin/jobs`、`/admin/audit-logs`、`/admin/settings`。
+
+```bash
+# 1) 分类：新建 → 改名 → 删除；中文名不填 slug 应 400/1003，slug 撞车 409/2001
+curl -s -X POST http://127.0.0.1:8641/api/admin/tags -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{"name":"Go","slug":"go","description":""}'
+curl -s -X DELETE http://127.0.0.1:8641/api/admin/tags/<id> -H "X-CSRF-Token: $CSRF"
+#    删除只解除关联，不删文章（`/admin/tags` 里 count 会变 0）
+
+# 2) 跳转：建一条老链接 → 公开端直接 301 且 hits+1
+curl -s -X POST http://127.0.0.1:8641/api/admin/redirects -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{"fromPath":"/posts/old-slug","toPath":"/posts/new-slug","status":301}'
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8640/posts/old-slug   # 301 → /posts/new-slug
+
+# 3) 附件：建一条 → 公开 /go 302 且 clicks+1
+curl -s -X POST http://127.0.0.1:8641/api/admin/attachments -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"postId":<id>,"title":"源码","shareUrl":"https://example.com/src.zip","fileName":"src.zip","bytes":1024,"sort":0}'
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8640/api/attachments/<id>/go
+
+# 4) 设置：改时区 → content_version+1（公开读的 ETag 随之失效）
+curl -s -X PUT http://127.0.0.1:8641/api/admin/settings -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{"siteTimezone":"Asia/Shanghai","imgBaseUrl":""}'
+curl -s http://127.0.0.1:8640/api/site | head -c 200       # contentVersion 应比改之前大
+curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # 400/1003
+```
+
+- `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`settings.update`…）。
+- 设置接口**永不返回** `visitor_salt` 与 WebDAV 口令；`/admin/settings` 里也只回显账号与地址。
 

@@ -3,10 +3,15 @@ package admin
 
 // ApiGroup 聚合管理端接口。
 type ApiGroup struct {
+	Attachment AttachmentApi
+	Audit      AuditApi
 	AuthApi
 	Comment CommentApi
+	Content ContentApi
+	Job     JobApi
 	Media   MediaApi
 	Post    PostApi
+	Setting SettingApi
 	Stats   StatsApi
 }
 

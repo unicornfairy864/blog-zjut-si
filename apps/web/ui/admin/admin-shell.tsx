@@ -2,11 +2,19 @@
 
 import {
   BarChart3,
+  CornerUpRight,
   FileText,
   Images,
+  Layers,
   LayoutDashboard,
+  Link2,
+  ListChecks,
   LogOut,
   MessageSquare,
+  Paperclip,
+  ScrollText,
+  Settings,
+  Tags,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -26,7 +34,15 @@ const NAV_ITEMS = [
   { href: "/admin/posts", label: "文章", icon: FileText },
   { href: "/admin/media", label: "媒体", icon: Images },
   { href: "/admin/comments", label: "评论", icon: MessageSquare },
+  { href: "/admin/tags", label: "标签", icon: Tags },
+  { href: "/admin/series", label: "系列", icon: Layers },
+  { href: "/admin/links", label: "友链", icon: Link2 },
+  { href: "/admin/redirects", label: "跳转", icon: CornerUpRight },
+  { href: "/admin/attachments", label: "附件", icon: Paperclip },
+  { href: "/admin/jobs", label: "任务", icon: ListChecks },
+  { href: "/admin/audit-logs", label: "审计", icon: ScrollText },
   { href: "/admin/stats", label: "统计", icon: BarChart3 },
+  { href: "/admin/settings", label: "设置", icon: Settings },
 ] as const;
 
 /** 管理端外壳：顶栏 + 导航 + 内容区（仅桌面宽度，agent.md §20）。 */
@@ -57,10 +73,11 @@ export function AdminShell({
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-border">
-        <div className="container flex h-14 items-center justify-between gap-6">
-          <div className="flex items-center gap-6">
+        {/* 导航项变多后必须允许换行，否则窄屏会把右侧的登出按钮挤出可视区。 */}
+        <div className="container flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 py-2">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
             <span className="text-sm font-semibold">zjut.si 管理台</span>
-            <nav aria-label="管理导航" className="flex items-center gap-1">
+            <nav aria-label="管理导航" className="flex flex-wrap items-center gap-1">
               {NAV_ITEMS.map((item) => {
                 const active =
                   item.href === "/admin"

@@ -26,6 +26,7 @@ import {
 } from "@/ui/admin/editor-toolbar";
 import { MediaPicker } from "@/ui/admin/media-picker";
 import { PostPreviewPane } from "@/ui/admin/post-preview";
+import { PostPublishing } from "@/ui/admin/post-publishing";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
 import { Button } from "@/ui/shadcn/button";
 import { Input } from "@/ui/shadcn/input";
@@ -506,6 +507,18 @@ export function PostEditor({ postId }: { postId: number | null }) {
             {busyAction === "publish" ? "发布中…" : "发布"}
           </Button>
         ) : null}
+        {status === "scheduled" ? (
+          // 定时中的文章主操作是取消定时（unpublish 会同时撤掉待执行的发布任务），
+          // 而不是"发布"：到点由后台任务接管，这里重复发布只会打乱已定的时间。
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleUnpublish}
+            disabled={busy}
+          >
+            {busyAction === "unpublish" ? "取消中…" : "取消定时"}
+          </Button>
+        ) : null}
         {status === "published" ? (
           <>
             <Button
@@ -558,6 +571,12 @@ export function PostEditor({ postId }: { postId: number | null }) {
           <AlertDescription>{saveError}</AlertDescription>
         </Alert>
       ) : null}
+
+      {/*
+        发布控制（D13）：定时发布 / 版本回滚 / 预览链接。
+        post 为 null 时组件自己只显示"先保存草稿"，所以这里不用额外判断。
+      */}
+      <PostPublishing post={post} onSaved={applySaved} disabled={busy} />
 
       <form
         className="space-y-5"

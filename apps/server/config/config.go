@@ -25,6 +25,7 @@ type Config struct {
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Upload    UploadConfig    `mapstructure:"upload"`
 	Task      TaskConfig      `mapstructure:"task"`
+	Backup    BackupConfig    `mapstructure:"backup"`
 	Cloudreve CloudreveConfig `mapstructure:"cloudreve"`
 }
 
@@ -78,6 +79,11 @@ type UploadConfig struct {
 type TaskConfig struct {
 	Enabled         bool `mapstructure:"enabled"`
 	IntervalSeconds int  `mapstructure:"interval_seconds"`
+}
+
+// BackupConfig 描述备份落点（agent.md §14：库保留 30 天、图片 90 天）。
+type BackupConfig struct {
+	Dir string `mapstructure:"dir"`
 }
 
 // CloudreveConfig 描述原图与变体归档的 WebDAV 目标（§10）。
@@ -204,6 +210,8 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("task.enabled", true)
 	v.SetDefault("task.interval_seconds", 60)
 
+	v.SetDefault("backup.dir", "./data/backup")
+
 	v.SetDefault("cloudreve.enabled", false)
 	v.SetDefault("cloudreve.webdav_url", "")
 	v.SetDefault("cloudreve.username", "")
@@ -223,6 +231,7 @@ func (c *Config) normalize() error {
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Auth.CookieName = strings.TrimSpace(c.Auth.CookieName)
 	c.Upload.Dir = strings.TrimSpace(c.Upload.Dir)
+	c.Backup.Dir = strings.TrimSpace(c.Backup.Dir)
 	c.Cloudreve.WebDAVURL = strings.TrimRight(strings.TrimSpace(c.Cloudreve.WebDAVURL), "/")
 	c.Cloudreve.Username = strings.TrimSpace(c.Cloudreve.Username)
 	c.Cloudreve.BasePath = strings.TrimSpace(c.Cloudreve.BasePath)
@@ -238,6 +247,11 @@ func (c *Config) normalize() error {
 	if c.Upload.Dir != "" {
 		if err := os.MkdirAll(c.Upload.Dir, 0o750); err != nil {
 			return fmt.Errorf("创建上传目录失败: %w", err)
+		}
+	}
+	if c.Backup.Dir != "" {
+		if err := os.MkdirAll(c.Backup.Dir, 0o750); err != nil {
+			return fmt.Errorf("创建备份目录失败: %w", err)
 		}
 	}
 	if c.DB.Path != "" {

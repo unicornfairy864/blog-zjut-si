@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.10**（2026-10-19 D12 互动与统计，见 §22）
+> 版本：**v1.12**（2026-10-19 D14 内容管理 / 附件 / 任务与审计 / 设置，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -48,6 +48,7 @@
                                               ├ /api/internal/*→ Go 本地
                                               ├ /healthz|/readyz→ Go 本地
                                               ├ /admin*        → Next :3000（含 /admin/login）
+                                              ├ /preview*      → Next :3000（隧道里也能直接开预览链接）
                                               ├ /_next/*       → Next :3000（+ /favicon.ico）
                                               └ 其余           → 404
 ```
@@ -230,7 +231,7 @@ storage_driver  : local | cloudreve
 
 **管理组（8641）**
 
-`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `POST /media/{id}/retry` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|PUT /pages/{slug}` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
+`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `POST /media/{id}/retry` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|PUT /pages/{slug}` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
 
 **内部组（8641，仅容器内/隧道）**
 
@@ -250,6 +251,32 @@ storage_driver  : local | cloudreve
 | 展示 | 阅读数 / 点赞数一律**客户端异步**取（`GET /posts/{slug}/stats`），不进 SSR HTML（§17.1） |
 | 管理端 | `GET /stats/overview`（文章/评论/媒体状态计数、PV/UV、点赞、Top 5 文章）、`GET /stats/daily?from&to`（全站行，缺省最近 30 天，范围 ≤366 天） |
 
+**发布控制与任务口径（D13）**
+
+| 项 | 规则 |
+| --- | --- |
+| 定时发布 | `POST /posts/{id}/schedule`（`publishedAt` 必须是未来时间）→ 落 `scheduled` 并投递 `publish_scheduled` 任务（`run_at = publishedAt`，payload `{postId}`）；重复调用会先撤掉该文待执行的同类任务 |
+| 到点生效 | 任务执行时再判一次：`status=scheduled` 且 `published_at <= now` 才发布，否则跳过（用户可能已取消定时）；发布逻辑与手动 `publish` 完全同源（写 revision、重算渲染、revision+1） |
+| 取消定时 | `POST /posts/{id}/unpublish` 与 PATCH 回 `draft` 都撤掉待执行的 `publish_scheduled` 任务 |
+| 版本回滚 | `POST /posts/{id}/revisions/{rid}/restore`：用旧版本内容覆盖正文，并**再写一条新 revision**（`revision+1`，note 记来源），历史不被改写 |
+| 预览链接 | `POST /posts/{id}/preview-link` 生成一次性 token（明文只回一次，库里只存 `token_hash`，24h 过期）；`GET /preview/{token}`（`no-store`）首次访问写 `used_at` 并返回内容，之后或过期 → `410 / 2006`；不存在 → `404 / 1002` |
+| 预览内容 | 预览页能看草稿 / 定时 / 归档文章；`robots.txt` 禁 `/preview`，且预览不参与 sitemap 与 RSS |
+| 任务投递 | `GET /jobs` 列表、`POST /jobs/{id}/retry` 重试失败任务、`POST /jobs` 手动投递（只允许 `cleanup` / `backup` / `link_check`，用于运维与自测） |
+| 周期任务 | 调度器每 tick 检查一次"当天该跑还没跑"的周期任务（按站点时区）：`backup` 03:00、`cleanup` 04:00；`link_check` 每周一 05:00。判据是 `jobs` 里当天是否已有同类型记录，重启不会重复跑 |
+
+**内容管理口径（D14）**
+
+| 项 | 规则 |
+| --- | --- |
+| 分类 CRUD | `GET|POST /{tags\|series}`、`PUT|DELETE /{tags\|series}/{id}`；`name` 必填且唯一，`slug` 可留空（ASCII 名自动生成，中文名必须手填，非法/冲突 → `400/1003`、`409/2001`）；列表带 `count`（该分类下**未删除**文章数，含草稿） |
+| 删除分类 | 连带清掉 `post_tags` / 把 `posts.series_id` 置 NULL，不删文章 |
+| 友链 CRUD | `GET|POST /links`、`PUT|DELETE /links/{id}`；`status` 只有 `active`/`hidden`，公开端只出 `active` |
+| 跳转 CRUD | `GET|POST /redirects`、`PUT|DELETE /redirects/{id}`；`status` 只有 301/302，`fromPath` 唯一且必须以 `/` 开头（≤200），`toPath` 必须以 `/` 开头或 `http(s)://` 开头（≤500）；**公开边缘按 `from_path` 精确匹配直接 301/302 并 `hits+1`**（在转 Next 之前处理） |
+| 附件 | `GET|POST /attachments`、`PUT|DELETE /attachments/{id}`；`shareUrl` 必填且是 http(s)；公开端 `GET /attachments/{id}/go` → `302` 到 `share_url` 并 `clicks+1`，不存在 → `404/1002`（`no-store`） |
+| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `400/1003`）；只读回显 `contentVersion`、上传目录与上限、任务开关与周期、图床开关与 `publicBaseUrl`（**口令永不返回**）。写成功必须 `content_version+1`（公开读的 ETag 依赖它） |
+| 任务页 | `GET /jobs` 分页 + `POST /jobs` 手动投递 + `POST /jobs/{id}/retry`；`payload` 原样回显 JSON 字符串 |
+| 审计页 | `GET /audit-logs` 分页，支持 `action` / `targetType` / `targetId` 过滤；`meta` 以对象回显（库里是 JSON 字符串） |
+
 ---
 
 ## 6. 状态机
@@ -268,6 +295,9 @@ draft ──publish──▶ published ──archive──▶ archived
 - `scheduled` 必须满足 `published_at > now`
 - 已发布文章 `slug` 不可变；确需修改时必须同时写 `redirects`，否则 `2004`
 - 每次 publish：`revision+1`、写 `post_revisions`、重算 `content_html/content_text/word_count/reading_time`
+- 已发布文章再次 publish：**内容与最新版本一致时按「重复发布」返回 `409 / 1004`**；
+  内容有变化（改过标题或正文）才允许，并**为改动记一个新版本**（`revision+1`，保留原 `published_at`）——
+  否则线上改字永远进不了版本历史，回滚也就无从谈起。自动保存（PATCH）仍然**不产生** revision
 - `archived` 与已删除文章对外返回 **410**，不出现在列表、搜索、sitemap、RSS
 
 **媒体**
@@ -504,10 +534,10 @@ apps/web/
 
 | 任务 | 触发 | 行为 |
 | --- | --- | --- |
-| `publish_scheduled` | 每分钟 | `scheduled` 且 `published_at<=now` → 发布 |
+| `publish_scheduled` | 定时发布时按 `published_at` 投递 | `scheduled` 且 `published_at<=now` → 发布（与手动发布同源）；已取消则跳过 |
 | `media_process` | 上传后 | 生成变体 + blurhash |
 | `media_archive` | 变体就绪 | WebDAV 推原图与四档变体到 Cloudreve |
-| `link_check` | 每周一 | HEAD 检查外链与正文图片，写 `link_checks` |
+| `link_check` | 每周一 05:00 | HEAD 检查外链与正文图片，写 `link_checks` |
 | `backup` | 每日 03:00（Asia/Shanghai） | `VACUUM INTO` + uploads 快照 |
 | `cleanup` | 每日 04:00（Asia/Shanghai） | 物理删软删 >30 天的文章、删 `page_views` >90 天、裁剪 revision 到 50、删过期 session/preview_token/login_attempts、删归档满 30 天的本地原图 |
 
@@ -726,6 +756,8 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.12 | 2026-10-19 | D14 内容管理与运维闭环（M8）：`tags`/`series`/`links`/`redirects`/`attachments` 管理端 CRUD（`GET|POST /x`、`PUT|DELETE /x/{id}`，分类列表带未删除文章数、删分类不删文章）；公开 `GET /attachments/{id}/go`（302 + `clicks+1`）与公开边缘按 `redirects.from_path` 精确 301/302（`hits+1`）；`GET|PUT /settings` 只允许改 `imgBaseUrl` / `siteTimezone` 并强制 `content_version+1`，图床口令永不返回；管理端 `GET /jobs` 与 `GET /audit-logs` 分页；web 新增标签/系列/友链/跳转/附件/任务/审计/设置页 |
+| 1.11 | 2026-10-19 | D13 发布控制（M7）：新增 `POST /posts/{id}/schedule`（未来时间 → `scheduled` + 投递 `publish_scheduled` 任务，`unpublish`/回草稿撤任务）与 `POST /jobs`（手动投递 `cleanup`/`backup`/`link_check`）；`POST /posts/{id}/revisions/{rid}/restore` 回滚时**新写一条 revision**；预览链接改为一次性（首次访问写 `used_at`，之后或过期 = 410/2006），公开 `GET /preview/{token}` 为 `no-store`；§13 明确周期任务（backup 03:00 / cleanup 04:00 / link_check 周一 05:00，按站点时区，判据是当天是否已有同类型任务） |
 | 1.10 | 2026-10-19 | D12 互动与统计（M6）：公开 `POST|DELETE /posts/{slug}/like`（幂等、10 次/分钟/visitor）、`GET /posts/{slug}/stats`（`no-store`，访客态）、`POST /events/view`（PV 明细 + 同 visitor 同文章 10 分钟去重，UV 按上海日期 `COUNT(DISTINCT visitor_hash)` 重算，同时写 `stats_daily` 文章行与 `post_id=0` 全站行）；管理端 `GET /stats/overview` 与 `GET /stats/daily`；访客标识改为 `X-Visitor-Id` 请求头（缺失按 `ip|ua` 兜底），公开 HTML 与公开读接口不 `Set-Cookie`；§11 允许 `{width=…}` 图片尺寸属性；编辑器预览改用 `PostContent`（行内 `$x$` 出公式）、支持拖拽上传与图片框拖拽改宽 |
 | 1.9 | 2026-10-19 | D11 评论（M5）：公开 `GET|POST /posts/{slug}/comments`（嵌套固定两层、只出 approved、3 次/10 分钟/IP 限流）、管理端 `GET|PATCH /comments` 与 `POST /comments/bulk`；新评论一律 pending，`posts.comment_count` 只算 approved；`PublicPostDetail` 增 `allowComments`；§6 补评论状态机；管理端新增 `/admin/comments` 审核页 |
 | 1.8 | 2026-10-19 | D9–D10 实现修订：公开端补 `GET /site`、`/tags`、`/tags/{slug}`、`/archive`、`/series`、`/series/{slug}`、`/links`、`/pages/{slug}`、`/posts/{slug}/related`；列表项与详情增 `cover`（四档 `variants` + `origUrl`）与 `tags`，详情增 `prev`/`next`；正文图片在读取时补 `srcset`/`sizes`/`width`/`height`/`loading`；`links.status` 枚举定为 `active`/`hidden`（与 000001 默认值一致）；410 由 `apps/web/middleware.ts` 返回（App Router 页面无法自定义状态码）；web 端新增 `PostImage`/`PostContent`/`PostCard`/`PostToc`/`Pagination`、blurhash 解码与 KaTeX 懒加载 |

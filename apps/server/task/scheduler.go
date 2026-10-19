@@ -80,6 +80,9 @@ const (
 
 // dispatch 领取并串行执行到期任务（并发固定为 1）。
 func (s *Scheduler) dispatch(ctx context.Context) {
+	// 先把"当天该跑还没跑"的周期任务入队，再统一领取（§13）。
+	s.enqueuePeriodic(time.Now())
+
 	if n, err := model.ResetStaleJobs(global.DB, dbtime.Now().Add(-staleAfter)); err != nil {
 		global.Log.Error("回收卡死任务失败", "err", err)
 	} else if n > 0 {

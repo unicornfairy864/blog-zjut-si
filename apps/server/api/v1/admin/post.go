@@ -10,6 +10,7 @@ import (
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/middleware"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/dbtime"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/errs"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/request"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/response"
@@ -59,6 +60,17 @@ type postUpdateRequest struct {
 
 // postPublishRequest 是发布入参；note 写入 post_revisions.note。
 type postPublishRequest struct {
+	Note string `json:"note" binding:"max=200"`
+}
+
+// postScheduleRequest 是定时发布入参；publishedAt 是 Unix 秒且必须是未来时间（§5）。
+type postScheduleRequest struct {
+	PublishedAt int64  `json:"publishedAt"`
+	Note        string `json:"note" binding:"max=200"`
+}
+
+// postRestoreRequest 是版本回滚入参；note 为空时服务端写成「回滚到版本 N」。
+type postRestoreRequest struct {
 	Note string `json:"note" binding:"max=200"`
 }
 
@@ -267,7 +279,7 @@ func (PostApi) Unpublish(c *gin.Context) {
 	response.OkWithDetailed(c, post, "文章已退回草稿")
 }
 
-// Revisions 处理 GET /api/admin/posts/{id}/revisions。
+// Revisions 处理 GET /api/admin/posts/{id}/revisions；返回 {list:[…]}，与前端取数约定一致。
 func (PostApi) Revisions(c *gin.Context) {
 	id, ok := postID(c)
 	if !ok {
@@ -278,7 +290,84 @@ func (PostApi) Revisions(c *gin.Context) {
 		response.FailWithError(c, err)
 		return
 	}
-	response.OkWithData(c, revisions)
+	response.OkWithData(c, gin.H{"list": revisions})
+}
+
+// Schedule 处理 POST /api/admin/posts/{id}/schedule：publishedAt 必须是未来时间（§5）。
+func (PostApi) Schedule(c *gin.Context) {
+	id, ok := postID(c)
+	if !ok {
+		return
+	}
+
+	var req postScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithDetailed(c, errs.ErrorValidation, request.ValidationDetails(err), "参数校验失败")
+		return
+	}
+	if fields := validateSchedule(req); len(fields) > 0 {
+		response.FailWithDetailed(c, errs.ErrorValidation, fields, "参数校验失败")
+		return
+	}
+
+	post, err := service.ServiceGroupApp.Post.Schedule(
+		id, dbtime.FromUnix(req.PublishedAt), req.Note, actorFrom(c))
+	if err != nil {
+		response.FailWithError(c, err)
+		return
+	}
+	response.OkWithDetailed(c, post, "已排定定时发布")
+}
+
+// RestoreRevision 处理 POST /api/admin/posts/{id}/revisions/{rid}/restore（§5：回滚生成新 revision）。
+func (PostApi) RestoreRevision(c *gin.Context) {
+	id, ok := postID(c)
+	if !ok {
+		return
+	}
+	revisionID, err := strconv.ParseInt(c.Param("rid"), 10, 64)
+	if err != nil || revisionID <= 0 {
+		response.FailWithDetailed(c, errs.ErrorValidation,
+			[]request.FieldError{{Field: "rid", Message: "必须是正整数"}}, "参数校验失败")
+		return
+	}
+
+	var req postRestoreRequest
+	if bindErr := c.ShouldBindJSON(&req); bindErr != nil && !errors.Is(bindErr, io.EOF) {
+		response.FailWithDetailed(c, errs.ErrorValidation, request.ValidationDetails(bindErr), "参数校验失败")
+		return
+	}
+
+	post, err := service.ServiceGroupApp.Post.RestoreRevision(id, revisionID, req.Note, actorFrom(c))
+	if err != nil {
+		response.FailWithError(c, err)
+		return
+	}
+	response.OkWithDetailed(c, post, "已回滚到该版本")
+}
+
+// PreviewLink 处理 POST /api/admin/posts/{id}/preview-link：生成一次性预览链接。
+func (PostApi) PreviewLink(c *gin.Context) {
+	id, ok := postID(c)
+	if !ok {
+		return
+	}
+	link, err := service.ServiceGroupApp.Post.CreatePreviewLink(id, actorFrom(c))
+	if err != nil {
+		response.FailWithError(c, err)
+		return
+	}
+	response.OkWithData(c, link)
+}
+
+// DeletePreviewLink 处理 DELETE /api/admin/preview-links/{token}。
+func (PostApi) DeletePreviewLink(c *gin.Context) {
+	token := strings.TrimSpace(c.Param("token"))
+	if err := service.ServiceGroupApp.Post.DeletePreviewLink(token, actorFrom(c)); err != nil {
+		response.FailWithError(c, err)
+		return
+	}
+	response.OkWithData(c, gin.H{"deleted": true})
 }
 
 // postID 解析路径里的文章主键；非法时直接写出 400。
@@ -299,4 +388,12 @@ func actorFrom(c *gin.Context) service.PostActor {
 		return service.PostActor{IP: c.ClientIP()}
 	}
 	return service.PostActor{AdminID: sessionCtx.Admin.ID, IP: c.ClientIP()}
+}
+
+// validateSchedule 校验定时发布时间：必须是未来时间（§5）。
+func validateSchedule(req postScheduleRequest) []request.FieldError {
+	if req.PublishedAt <= int64(dbtime.Now()) {
+		return []request.FieldError{{Field: "publishedAt", Message: "必须是未来时间"}}
+	}
+	return nil
 }

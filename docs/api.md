@@ -178,6 +178,23 @@ PV 打点。请求体：
 - 访客标识取请求头 `X-Visitor-Id`（前端 `localStorage` 生成，8–64 位 `[A-Za-z0-9_-]`）；
   缺失或非法时按 `ip|ua` 兜底。公开接口**不 `Set-Cookie`**。
 
+### `GET /api/preview/{token}`
+
+一次性预览链接，看草稿 / 定时 / 归档文章用；响应 `Cache-Control: no-store`，
+不参与 ETag，也不进 sitemap / RSS / 搜索。
+
+```json
+{ "code": 0, "data": {
+    "slug": "hello", "title": "你好", "status": "draft",
+    "excerpt": "…", "contentHtml": "<p>…</p>",
+    "wordCount": 120, "readingTime": 1,
+    "publishedAt": null, "updatedAt": 1760000000, "expiresAt": 1760000000
+  }, "msg": "操作成功" }
+```
+
+- 首次访问写 `used_at` 并返回内容；**再次访问或超过 24h → `410 / 2006`**。
+- token 不存在 → `404 / 1002`；token 是 64 位 hex（32 字节随机），库里只存 `token_hash`。
+
 ### `GET /api/site`
 
 站点级信息：`settings` 派生的时区 / 图片前缀 / 内容版本，加上公开计数。
@@ -324,7 +341,7 @@ PV 打点。请求体：
 | `PUT /api/admin/posts/{id}` | 覆盖式保存，必须带 `title` 与 `contentMd` |
 | `PATCH /api/admin/posts/{id}` | 局部更新；`nil` 字段不改 |
 | `DELETE /api/admin/posts/{id}` | 软删（回收站，30 天后物理删除） |
-| `POST /api/admin/posts/{id}/publish` | 发布；写版本快照并 `revision+1` |
+| `POST /api/admin/posts/{id}/publish` | 发布；写版本快照并 `revision+1`。已发布文章内容有变化时再发布 = 为改动记新版本（保留原 `published_at`）；内容没变 → `409 / 1004` |
 | `POST /api/admin/posts/{id}/unpublish` | 取消发布 / 取消归档，回到草稿 |
 | `GET /api/admin/posts/{id}/revisions` | 版本列表，最多 50 条 |
 | `POST /api/admin/posts/preview` | 渲染未保存正文，不落库；与发布结果同源 |
@@ -339,8 +356,7 @@ PV 打点。请求体：
 | --- | --- | --- |
 | 1002 | 404 | 文章不存在 |
 | 1003 | 400 | 参数校验失败（`data` 为字段错误数组） |
-| 1004 | 409 | 非法状态迁移（如重复发布、草稿归档） |
-| 1005 | 429 | 公开接口限流 |
+| 1004 | 409 | 非法状态迁移（如重复发布、草稿归档） || 1005 | 429 | 公开接口限流 |
 | 1007 | 410 | 公开端访问已归档/已删除文章 |
 | 2001 | 409 | slug 冲突 |
 | 2004 | 409 | 已发布文章改 slug 未写跳转 |
@@ -351,6 +367,123 @@ PV 打点。请求体：
 // POST /api/admin/posts/preview  →  data
 { "html": "<h2 id=\"h-1a2b3c4d\">标题</h2>", "text": "标题", "wordCount": 2, "readingTime": 1, "excerpt": "标题" }
 ```
+
+### 定时发布 / 版本回滚 / 预览链接
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /api/admin/posts/{id}/schedule` | `{"publishedAt": 1760000000, "note": "定时发布"}`；`publishedAt` 必须是**未来**时间（否则 `400 / 1003`，`data` 带 `field=publishedAt`），落 `scheduled` 并投递 `publish_scheduled` 任务 |
+| `POST /api/admin/posts/{id}/unpublish` | 退回草稿，同时撤掉该文待执行的 `publish_scheduled` 任务 |
+| `POST /api/admin/posts/{id}/revisions/{rid}/restore` | `{"note": "回滚"}` 可选；用旧版本覆盖正文并**再写一条新 revision**（`revision+1`），历史不被改写 |
+| `GET /api/admin/posts/{id}/revisions` | `data: {"list":[…]}`，最多 50 条、按 `revisionNo` 倒序，**不含正文** |
+| `POST /api/admin/posts/{id}/preview-link` | 生成一次性预览链接 → `{"token":"…","url":"/preview/…","expiresAt":1760000000}`；**同一篇文章旧的未使用链接会被作废** |
+| `DELETE /api/admin/preview-links/{token}` | 立即作废该链接 → `{"deleted":true}`；不存在 → `404 / 1002` |
+
+```json
+// POST /api/admin/posts/{id}/schedule  →  data（与 GET /posts/{id} 同形状）
+{ "id": 3, "slug": "hello", "title": "你好", "status": "scheduled",
+  "publishedAt": 1760000000, "revision": 2, … }
+```
+
+定时发布到点由 `publish_scheduled` 任务完成（调度器每 60s 扫一次，误差 <90s）；
+任务执行时会再确认一次「仍是 `scheduled` 且 `published_at <= now`」，用户中途取消就不会误发。
+
+```json
+// POST /api/admin/posts/{id}/preview-link  →  data
+{ "token": "9f2c…（32 字节 hex，明文只出现这一次）", "url": "/preview/9f2c…", "expiresAt": 1760000000 }
+```
+
+库里只存 `token_hash`；公开端 `GET /api/preview/{token}` 首次访问写 `used_at` 并返回内容，
+之后或超过 24h → `410 / 2006`，token 不存在 → `404 / 1002`。
+
+隧道里（`http://localhost:8641`）点开 `/preview/…` 也能直接看：8641 边缘同样把 `/preview*`
+转给 Next，不必把域名换成公网站点。
+
+### 任务与审计
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/jobs?status=&page=&pageSize=` | 任务队列分页，按 `run_at` 倒序；`status` 空表示全部 |
+| `POST /api/admin/jobs` | 手动投递：`{"type":"cleanup"}`，只接受 `cleanup` / `backup` / `link_check`，立即入队 |
+| `POST /api/admin/jobs/{id}/retry` | 把 `failed` 任务放回 `pending` 并立刻到期；非 `failed` → `409 / 1004` |
+| `GET /api/admin/audit-logs?action=&targetType=&targetId=&page=&pageSize=` | 审计日志分页，按创建时间倒序；`adminId` / `ipHash` 只在这里出现 |
+
+```json
+// GET /api/admin/jobs  →  data.list[]
+{ "id": 12, "type": "cleanup", "payload": "{}", "runAt": 1760000000, "status": "done",
+  "attempts": 1, "maxAttempts": 3, "lastError": "", "lockedAt": null, "createdAt": 1760000000 }
+```
+
+```json
+// GET /api/admin/audit-logs  →  data.list[]
+{ "id": 88, "adminId": 1, "action": "post.publish", "targetType": "post", "targetId": "3",
+  "meta": { "revision": 2 }, "ipHash": "…", "createdAt": 1760000000 }
+```
+
+### 分类与友链（管理端）
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/tags` · `GET /api/admin/series` | 全量列表（不分页），带 `count`（未删除文章数，含草稿） |
+| `POST /api/admin/tags` · `POST /api/admin/series` | `{"name":"Go","slug":"go","description":""}`；`slug` 留空时由 ASCII 名生成，中文名必须手填 |
+| `PUT /api/admin/tags/{id}` · `PUT /api/admin/series/{id}` | 同上字段，均可选 |
+| `DELETE /api/admin/tags/{id}` · `DELETE /api/admin/series/{id}` | 连带清 `post_tags` / 把 `posts.series_id` 置 NULL，**不删文章** |
+| `GET /api/admin/links` | 全量（含 `hidden`），按 `sort`、`id` 升序 |
+| `POST /api/admin/links` | `{"name":"…","url":"https://…","avatar":"","description":"","sort":1,"status":"active"}` |
+| `PUT /api/admin/links/{id}` · `DELETE /api/admin/links/{id}` | 同上 |
+
+```json
+// GET /api/admin/tags  →  data
+{ "list": [ { "id": 1, "name": "Go", "slug": "go", "description": "", "count": 3, "createdAt": 1760000000 } ] }
+```
+
+冲突与校验：`slug` 重复 → `409 / 2001`；`slug` 非法或中文名留空 → `400 / 1003`（`data` 带 `field`）；
+`name` 重复 → `409 / 1004`。
+
+### 跳转与附件
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/redirects` | 全量，按 `id` 倒序 |
+| `POST /api/admin/redirects` | `{"fromPath":"/posts/old","toPath":"/posts/new","status":301}`；`fromPath` 唯一、以 `/` 开头且 ≤200；`toPath` 以 `/` 开头或 `http(s)://` 开头、≤500 |
+| `PUT /api/admin/redirects/{id}` · `DELETE /api/admin/redirects/{id}` | 同上 |
+| `GET /api/admin/attachments?postId=&page=&pageSize=` | 附件分页，按 `sort`、`id` 升序 |
+| `POST /api/admin/attachments` | `{"postId":3,"title":"源码","shareUrl":"https://…","fileName":"src.zip","bytes":1024,"sha256":"","version":"v1","sort":0}` |
+| `PUT /api/admin/attachments/{id}` · `DELETE /api/admin/attachments/{id}` | 同上字段，均可选 |
+| `GET /api/attachments/{id}/go` | **公开**：`302` 跳 `share_url` 并 `clicks+1`；不存在 → `404 / 1002`；响应 `no-store` |
+
+```json
+// GET /api/admin/attachments  →  data.list[]
+{ "id": 5, "postId": 3, "title": "源码", "shareUrl": "https://…", "fileName": "src.zip",
+  "bytes": 1024, "sha256": "", "version": "v1", "sort": 0, "clicks": 12, "createdAt": 1760000000 }
+```
+
+公开边缘还会按 `redirects.from_path` 精确匹配：命中就 `301/302` 到 `to_path` 并 `hits+1`，
+不落 Next（所以改 slug 后老链接不会 404）。
+
+### 设置
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/settings` | 当前可写项 + 只读回显（**不含任何口令**） |
+| `PUT /api/admin/settings` | `{"imgBaseUrl":"","siteTimezone":"Asia/Shanghai"}`；写成功会 `content_version+1` |
+
+```json
+// GET /api/admin/settings  →  data
+{
+  "imgBaseUrl": "", "siteTimezone": "Asia/Shanghai", "contentVersion": 7,
+  "upload": { "dir": "/data/blog/uploads", "maxBytes": 31457280 },
+  "task": { "enabled": true, "intervalSeconds": 60 },
+  "cloudreve": { "enabled": true, "webdavUrl": "https://pan.example.com/dav",
+                 "username": "…", "basePath": "/blog", "publicBaseUrl": "https://pan.example.com/public/blog",
+                 "archiveVariants": true },
+  "db": { "path": "/data/blog/db/blog.db" }
+}
+```
+
+- `siteTimezone` 必须是 `time.LoadLocation` 认得的 IANA 名（如 `Asia/Shanghai`），否则 `400 / 1003`。
+- `imgBaseUrl` 留空表示用相对路径 `/uploads/…`（由 nginx 直出）；填了必须是 `http(s)://` 且不带结尾斜杠。
+- `visitor_salt` 属于内部密钥，**任何接口都不返回**（§9）。
 
 ### 媒体
 

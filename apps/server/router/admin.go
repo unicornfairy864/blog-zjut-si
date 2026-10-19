@@ -38,8 +38,14 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.PATCH("/posts/:id", v1.ApiGroupApp.Admin.Post.Update)
 			authorized.DELETE("/posts/:id", v1.ApiGroupApp.Admin.Post.Delete)
 			authorized.POST("/posts/:id/publish", v1.ApiGroupApp.Admin.Post.Publish)
+			authorized.POST("/posts/:id/schedule", v1.ApiGroupApp.Admin.Post.Schedule)
 			authorized.POST("/posts/:id/unpublish", v1.ApiGroupApp.Admin.Post.Unpublish)
 			authorized.GET("/posts/:id/revisions", v1.ApiGroupApp.Admin.Post.Revisions)
+			authorized.POST("/posts/:id/revisions/:rid/restore", v1.ApiGroupApp.Admin.Post.RestoreRevision)
+
+			// 预览链接（D13）：生成一次性链接与立即作废。
+			authorized.POST("/posts/:id/preview-link", v1.ApiGroupApp.Admin.Post.PreviewLink)
+			authorized.DELETE("/preview-links/:token", v1.ApiGroupApp.Admin.Post.DeletePreviewLink)
 
 			// 媒体（D7）：上传、媒体库、删除与重试。
 			authorized.GET("/media", v1.ApiGroupApp.Admin.Media.List)
@@ -55,6 +61,38 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			// 统计看板（D12）：overview 与全站日粒度（§5）。
 			authorized.GET("/stats/overview", v1.ApiGroupApp.Admin.Stats.Overview)
 			authorized.GET("/stats/daily", v1.ApiGroupApp.Admin.Stats.Daily)
+
+			// 内容管理（D14）：标签 / 系列 / 友链 / 跳转的 CRUD（§5「内容管理口径」）。
+			authorized.GET("/tags", v1.ApiGroupApp.Admin.Content.Tags)
+			authorized.POST("/tags", v1.ApiGroupApp.Admin.Content.CreateTag)
+			authorized.PUT("/tags/:id", v1.ApiGroupApp.Admin.Content.UpdateTag)
+			authorized.DELETE("/tags/:id", v1.ApiGroupApp.Admin.Content.DeleteTag)
+			authorized.GET("/series", v1.ApiGroupApp.Admin.Content.Series)
+			authorized.POST("/series", v1.ApiGroupApp.Admin.Content.CreateSeries)
+			authorized.PUT("/series/:id", v1.ApiGroupApp.Admin.Content.UpdateSeries)
+			authorized.DELETE("/series/:id", v1.ApiGroupApp.Admin.Content.DeleteSeries)
+			authorized.GET("/links", v1.ApiGroupApp.Admin.Content.Links)
+			authorized.POST("/links", v1.ApiGroupApp.Admin.Content.CreateLink)
+			authorized.PUT("/links/:id", v1.ApiGroupApp.Admin.Content.UpdateLink)
+			authorized.DELETE("/links/:id", v1.ApiGroupApp.Admin.Content.DeleteLink)
+			authorized.GET("/redirects", v1.ApiGroupApp.Admin.Content.Redirects)
+			authorized.POST("/redirects", v1.ApiGroupApp.Admin.Content.CreateRedirect)
+			authorized.PUT("/redirects/:id", v1.ApiGroupApp.Admin.Content.UpdateRedirect)
+			authorized.DELETE("/redirects/:id", v1.ApiGroupApp.Admin.Content.DeleteRedirect)
+
+			// 附件与设置（D14）。
+			authorized.GET("/attachments", v1.ApiGroupApp.Admin.Attachment.List)
+			authorized.POST("/attachments", v1.ApiGroupApp.Admin.Attachment.Create)
+			authorized.PUT("/attachments/:id", v1.ApiGroupApp.Admin.Attachment.Update)
+			authorized.DELETE("/attachments/:id", v1.ApiGroupApp.Admin.Attachment.Delete)
+			authorized.GET("/settings", v1.ApiGroupApp.Admin.Setting.Detail)
+			authorized.PUT("/settings", v1.ApiGroupApp.Admin.Setting.Update)
+
+			// 任务与审计（D13/D14）：队列查看、手动投递、重试与审计查询。
+			authorized.GET("/jobs", v1.ApiGroupApp.Admin.Job.List)
+			authorized.POST("/jobs", v1.ApiGroupApp.Admin.Job.Enqueue)
+			authorized.POST("/jobs/:id/retry", v1.ApiGroupApp.Admin.Job.Retry)
+			authorized.GET("/audit-logs", v1.ApiGroupApp.Admin.Audit.List)
 		}
 	}
 

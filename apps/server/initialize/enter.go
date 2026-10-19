@@ -68,8 +68,12 @@ func Run() {
 
 	group.Go(func() error {
 		handlers := map[string]task.Handler{
-			model.JobTypeMediaProcess: service.ServiceGroupApp.Media.HandleProcess,
-			model.JobTypeMediaArchive: service.ServiceGroupApp.Media.HandleArchive,
+			model.JobTypePublishScheduled: service.ServiceGroupApp.Task.HandlePublishScheduled,
+			model.JobTypeMediaProcess:     service.ServiceGroupApp.Media.HandleProcess,
+			model.JobTypeMediaArchive:     service.ServiceGroupApp.Media.HandleArchive,
+			model.JobTypeLinkCheck:        service.ServiceGroupApp.Task.HandleLinkCheck,
+			model.JobTypeBackup:           service.ServiceGroupApp.Task.HandleBackup,
+			model.JobTypeCleanup:          service.ServiceGroupApp.Task.HandleCleanup,
 		}
 		return task.NewScheduler(global.Config.Task, handlers).Start(groupCtx)
 	})

@@ -24,13 +24,17 @@ func IsAPIPath(path string) bool {
 
 // IsAdminPagePath 报告 8641 上该路径是否应转发给 Next。
 //
-// 登录页在 /admin/login（app/(admin)/admin/login），因此 /admin* 一并放行。
+// 登录页在 /admin/login（app/(admin)/admin/login），因此 /admin* 一并放行；
+// /preview/* 也放行：作者在隧道里（http://localhost:8641）点开预览链接就能直接看，
+// 不必把域名换成公网站点（§5 预览链接）。
 func IsAdminPagePath(path string) bool {
 	switch path {
 	case "/favicon.ico", "/robots.txt":
 		return true
 	}
-	return hasPathPrefix(path, "/admin") || strings.HasPrefix(path, "/_next/")
+	return hasPathPrefix(path, "/admin") ||
+		hasPathPrefix(path, "/preview") ||
+		strings.HasPrefix(path, "/_next/")
 }
 
 // hasPathPrefix 按路径段比较，避免 /administrator 误命中 /admin。
