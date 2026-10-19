@@ -237,3 +237,54 @@ docker compose logs --tail=50 blog
 之后想补归档：把开关打开并重建容器，然后在媒体库对每张图点「重试」即可重新投递任务
 （重试会重新生成变体并投递归档）。
 
+### 11.5 磁盘上的物理文件名不可预测（实测结论，别拿它做直出）
+
+Cloudreve 落盘的文件名由**存储策略的两个模板**拼成（源码 `pkg/filemanager/fs/dbfs/dbfs.go`
+的 `generateSavePath`）：
+
+```
+物理路径 = path.Join(策略.DirNameRule, 策略.FileNameRule)
+```
+
+默认 `FileNameRule = {uid}_{randomkey8}_{originname}`，所以磁盘上是 `1_bTi2XvqV_target.png`
+（`1` = uid，`bTi2XvqV` = 8 位随机，`target.png` = 原名）。随机段是**每次上传时服务端现生成**的，
+WebDAV 不会把它交出来：
+
+- `PROPFIND` 只返回虚拟路径和 4 字符 `getetag`（形如 `"XqUl"`，是 `pkg/hashid` 对文件 ID 的编码），
+  与物理名里的随机段无关；实测用 ETag 拼 `{uid}_{etag}_{name}` 等 10 种组合全部 404；
+- 同名、同内容都不去重：两次上传是两份物理文件，配额各自 +size；
+- 结论：**WebDAV 无法直接或低成本拿到物理名**，也无法反推。公开图必须走确定性路径，
+  即 `/data/blog/uploads/{sha[:2]}/{sha}/{480,960,1600,2400}.webp`，Cloudreve 只当归档。
+
+如果确实要让 Cloudreve 的目录被匿名直出、且名字可预测，只能改策略模板（后台 → 存储策略 → 编辑，
+字段就是 `DirNameRule` / `FileNameRule`，admin API 直接收整个 policy 对象）：
+
+| 目标 | 写法 |
+| --- | --- |
+| 平铺、直接用虚拟文件名 | `DirNameRule = <data>/public`，`FileNameRule = {originname}` |
+| 保留虚拟目录结构 | `DirNameRule = <data>/public/{path}`，`FileNameRule = {originname}` |
+
+可用变量（`pkg/util/common.go` 的 `ReplaceMagicVar`）：`{randomkey16}`、`{randomkey8}`、
+`{timestamp}`、`{timestamp_nano}`、`{randomnum2|3|4|8}`、`{uid}`、`{datetime}`、`{date}`、`{year}`、
+`{month}`、`{day}`、`{hour}`、`{minute}`、`{second}`、`{uuid}`、`{ext}`、`{originname}`、
+`{originname_without_ext}`、`{path}`、`{blob_name}`、`{blob_name_without_ext}`。
+
+改之前必须知道三件事：
+
+1. **只影响新上传**：老文件仍是旧名，旧 URL 继续可用，不会自动迁移。
+2. **同名会撞**：模板里不含随机段时，不同虚拟目录的同名文件指向同一物理路径，Cloudreve 在非覆盖
+   模式下会直接报「文件已存在」（`pkg/filemanager/driver/local/local.go` 有 `util.Exists` 检查）。
+   博客上传用 `{sha256}.{ext}` 命名不会撞，手工上传的图会。
+3. **直出即公开**：`location /public/ { alias <策略根>/; }` 公开的是**整个策略根目录**，不是网盘里
+   那个名叫 `public` 的虚拟文件夹 —— 该策略下任何目录的文件都平铺在这个物理目录里，只要知道文件名
+   就能匿名下载。改成可预测命名后等于可被枚举下载，所以这种策略只应给专用归档账号用。
+   另外**绝不能**把 alias 指到 `<data>` 父目录（会暴露 `cloudreve.db` / `conf.ini`）。
+
+权限与验证：容器写的文件属主 uid 1000、目录 0750/文件 0640，nginx 的 `www-data` 需要 ACL（见 §10）：
+
+```bash
+sudo setfacl -R -m u:www-data:rX <策略根>
+sudo setfacl -R -d -m u:www-data:rX <策略根>
+curl -sI -H 'Host: pan.example.com' http://127.0.0.1/public/<文件名> | head -3
+```
+
