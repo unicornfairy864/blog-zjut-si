@@ -269,22 +269,37 @@ WebDAV 不会把它交出来：
 `{month}`、`{day}`、`{hour}`、`{minute}`、`{second}`、`{uuid}`、`{ext}`、`{originname}`、
 `{originname_without_ext}`、`{path}`、`{blob_name}`、`{blob_name_without_ext}`。
 
-改之前必须知道三件事：
+改之前必须知道四件事：
 
-1. **只影响新上传**：老文件仍是旧名，旧 URL 继续可用，不会自动迁移。
-2. **同名会撞**：模板里不含随机段时，不同虚拟目录的同名文件指向同一物理路径，Cloudreve 在非覆盖
+1. **只影响新上传**：老文件仍是旧名，旧 URL 继续可用，不会自动迁移（实测改规则后
+   `/public/1_bTi2XvqV_target.png` 仍是 `200`，而 `/public/target.png` 是 `404`）。
+2. **名字里不能含随机段**：`{uuid}`、`{randomkey8}`、`{randomkey16}` 是每次上传现场生成的，
+   WebDAV 不回传，客户端**永远算不出 URL**。要可预测只能用常量、`{uid}`、`{path}`、`{originname}`。
+   推荐的最终形态是 `FileNameRule = {originname}`：物理名 = 虚拟名，URL 即
+   `<公开前缀>/{sha256}.{ext}`，而唯一性由 Cloudreve 的同目录重名约束 + 博客的 sha256 文件名保证。
+3. **同名会撞**：模板里不含随机段时，不同虚拟目录的同名文件指向同一物理路径，Cloudreve 在非覆盖
    模式下会直接报「文件已存在」（`pkg/filemanager/driver/local/local.go` 有 `util.Exists` 检查）。
    博客上传用 `{sha256}.{ext}` 命名不会撞，手工上传的图会。
-3. **直出即公开**：`location /public/ { alias <策略根>/; }` 公开的是**整个策略根目录**，不是网盘里
+4. **直出即公开**：`location /public/ { alias <策略根>/; }` 公开的是**整个策略根目录**，不是网盘里
    那个名叫 `public` 的虚拟文件夹 —— 该策略下任何目录的文件都平铺在这个物理目录里，只要知道文件名
    就能匿名下载。改成可预测命名后等于可被枚举下载，所以这种策略只应给专用归档账号用。
    另外**绝不能**把 alias 指到 `<data>` 父目录（会暴露 `cloudreve.db` / `conf.ini`）。
 
-权限与验证：容器写的文件属主 uid 1000、目录 0750/文件 0640，nginx 的 `www-data` 需要 ACL（见 §10）：
+**权限：Cloudreve 建的目录是 0744，nginx 必然 403。**
+本地驱动建文件、建目录都用 `Perm = 0744`（`pkg/filemanager/driver/local/local.go`），
+目录 0744 表示 other 只有 `r` 没有 `x` —— www-data 无法**穿透**该目录，所以它下面
+**任何**路径（哪怕是根本不存在的文件）都返回 `403`，而不是 `404`。这也是区分「名字不对」和
+「没权限」的判据：`404` = 名字不对，`403` = 目录穿不过去。
+
+给策略根补一次权限，`-d` 让之后新建的 0744 目录自动继承：
 
 ```bash
-sudo setfacl -R -m u:www-data:rX <策略根>
+sudo setfacl -R  -m u:www-data:rX <策略根>
 sudo setfacl -R -d -m u:www-data:rX <策略根>
-curl -sI -H 'Host: pan.example.com' http://127.0.0.1/public/<文件名> | head -3
+# 没有 acl 时退而求其次：sudo chmod -R a+rX <策略根>
+curl -sI https://pan.example.com/public/blog/<文件名> | head -3
 ```
+
+注意博客容器自己写的文件（`/data/blog/uploads`）是 uid 1000、目录 0750/文件 0640，
+那是另一处 ACL，见 §10。
 
