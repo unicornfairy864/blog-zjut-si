@@ -178,6 +178,7 @@
 posts.status    : draft | scheduled | published | archived
 media.status    : processing | ready | failed      # uploading 是内存态，不落库
 comments.status : pending | approved | spam | deleted
+links.status    : active | hidden                  # 默认 active（migrations/000001）
 jobs.status     : pending | running | done | failed
 jobs.type       : publish_scheduled | media_process | media_archive | link_check | backup | cleanup
 storage_driver  : local | cloudreve
@@ -358,6 +359,14 @@ apps/web/
 | 质量门 | `pnpm lint && pnpm typecheck && pnpm test && pnpm build` 全绿才允许提交 |
 | 禁止 | Server Actions（会绕过 `lib/api`）、组件内拼 API 路径、`app/api` 透传业务数据、AntD/MUI/Redux |
 
+**公开页路由**（D9–D10）：`/`、`/posts`、`/posts/[slug]`、`/tags`、`/tags/[slug]`、`/archive`、
+`/search`、`/series`、`/series/[slug]`、`/links`，以及用 `[slug]` 承载 `/about` 等 `pages` 静态页
+（静态段优先于动态段，未知单段路径落 404）。
+
+**图片与正文**：列表与详情的封面统一走 `ui/post/PostImage`（自出 `srcset` + blurhash 占位，
+不用 `next/image`）；正文走 `ui/post/PostContent`（注入服务端 HTML，客户端只做 KaTeX 懒加载与
+代码块复制按钮，无 JS 时正文完整可读）。
+
 ---
 
 ## 9. 安全规范
@@ -409,6 +418,8 @@ apps/web/
   公开详情返回的 `contentHtml` 会给本站图片包一层
   `<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank" rel="noopener noreferrer">`。
   链接在**读取时现算**（归档晚于发布也不会漏），图床未启用或该图未归档时 `contentHtml` 原样返回
+- 正文图片的 `srcset`（四档变体）/`sizes`/`width`/`height`/`loading` 也在**读取时**由同一处补上：
+  存库的 `content_html` 保持编辑器产出的原始形态，响应里才是响应式版本（§16 G4「srcset 生效」）
 - 该直链成立的前提：图床存储策略的「文件名规则」必须是 `{originname}`，不能含 `{uuid}`/`{randomkey8}`
   这类随机段，否则博客算不出真实文件名（原因与排查见 `docs/runbook.md` §11.5）
 
@@ -433,6 +444,10 @@ apps/web/
 | SEO | 每页唯一 `title/description/canonical`；文章页输出 `Article` JSON-LD；`sitemap.xml` 仅含 published；`rss.xml` 全文；`robots.txt` 禁 `/admin`、`/preview` |
 | 草稿隔离 | 未发布内容在任何公开接口、sitemap、RSS、搜索中均不可见 |
 | 410 | `archived` 与已删除文章返回 410，不返回 404 |
+
+**410 的落点**：App Router 的页面无法自定义状态码（`notFound()` 只会给 404），所以
+`/posts/{slug}` 的 410 由 `apps/web/middleware.ts` 在进入页面前探测 `GET /api/posts/{slug}`
+并直接返回一份独立的 410 HTML；客户端导航（RSC 请求）不走这条路径，由页面按 404 兜底。
 
 ---
 
@@ -678,6 +693,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.8 | 2026-10-19 | D9–D10 实现修订：公开端补 `GET /site`、`/tags`、`/tags/{slug}`、`/archive`、`/series`、`/series/{slug}`、`/links`、`/pages/{slug}`、`/posts/{slug}/related`；列表项与详情增 `cover`（四档 `variants` + `origUrl`）与 `tags`，详情增 `prev`/`next`；正文图片在读取时补 `srcset`/`sizes`/`width`/`height`/`loading`；`links.status` 枚举定为 `active`/`hidden`（与 000001 默认值一致）；410 由 `apps/web/middleware.ts` 返回（App Router 页面无法自定义状态码）；web 端新增 `PostImage`/`PostContent`/`PostCard`/`PostToc`/`Pagination`、blurhash 解码与 KaTeX 懒加载 |
 | 1.7 | 2026-10-19 | D8 补充：`media_archive` 同时推四档变体（`cloudreve.archive_variants`，默认开）；新增 `cloudreve.public_base_url`，公开详情 `contentHtml` 在读取时给本站图片包上「查看原图」链接（`MediaItem.origUrl` 同步暴露）；明确图床「文件名规则」必须为 `{originname}` |
 | 1.6 | 2026-10-19 | D8 实现修订：白名单补 `buckket/go-blurhash`；`media_process` / `media_archive` 接入 jobs 调度器（并发 1、退避 1m/5m/15m）；Cloudreve 归档配置（`cloudreve.*`，口令只走环境变量） |
 | 1.5 | 2026-10-18 | D7 实现修订：管理端（8641）增加 `/uploads/*` 磁盘直出，供媒体库与编辑器预览（8640 仍由 nginx 直出）；白名单补 `golang.org/x/image`（缩放），明确 `gen2brain/webp` 用 `-tags nodynamic` 的 wazero 后端构建 |

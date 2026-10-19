@@ -10,6 +10,7 @@ type ServiceGroup struct {
 	Health  HealthService
 	Media   MediaService
 	Post    PostService
+	Public  PublicService
 	Setting SettingService
 }
 

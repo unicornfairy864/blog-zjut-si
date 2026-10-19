@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strings"
 	"unicode/utf8"
 
@@ -292,6 +293,153 @@ func searchPublishedLike(db *gorm.DB, keyword string, limit, offset int) ([]Post
 	return posts, total, nil
 }
 
+// CountPublishedPosts 返回已发布文章数（/api/site 的 posts 计数）。
+func CountPublishedPosts(db *gorm.DB) (int64, error) {
+	var total int64
+	err := db.Model(&Post{}).
+		Where("status = ? AND deleted_at IS NULL", PostStatusPublished).
+		Count(&total).Error
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// ListPublishedForArchive 返回归档所需的已发布文章字段，按发布时间倒序（§5 归档）。
+func ListPublishedForArchive(db *gorm.DB) ([]Post, error) {
+	posts := make([]Post, 0)
+	err := db.Model(&Post{}).
+		Select("id", "slug", "title", "published_at").
+		Where("status = ? AND deleted_at IS NULL AND published_at IS NOT NULL", PostStatusPublished).
+		Order("published_at DESC, id DESC").
+		Find(&posts).Error
+	if err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+// ListTagPublishedPosts 返回某标签下已发布文章的一页，按发布时间倒序。
+func ListTagPublishedPosts(db *gorm.DB, tagID int64, limit, offset int) ([]Post, int64, error) {
+	filter := func() *gorm.DB {
+		return db.Model(&Post{}).
+			Joins("JOIN post_tags ON post_tags.post_id = posts.id").
+			Where("post_tags.tag_id = ? AND posts.status = ? AND posts.deleted_at IS NULL",
+				tagID, PostStatusPublished)
+	}
+
+	// post_tags 的主键是 (post_id, tag_id)，固定 tag_id 后每篇文章只会命中一次。
+	var total int64
+	if err := filter().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	posts := make([]Post, 0)
+	query := filter().Select("posts.*").Order("posts.published_at DESC, posts.id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if offset > 0 {
+		query = query.Offset(offset)
+	}
+	if err := query.Find(&posts).Error; err != nil {
+		return nil, 0, err
+	}
+	return posts, total, nil
+}
+
+// ListRelatedPublishedPosts 返回相关文章：同标签**或**同系列、排除自身、仅已发布，
+// 按发布时间倒序取前 limit 篇（§5）；没有关联时返回空切片。
+func ListRelatedPublishedPosts(db *gorm.DB, post *Post, limit int) ([]Post, error) {
+	posts := make([]Post, 0)
+	if limit <= 0 {
+		return posts, nil
+	}
+
+	// series_id 为 NULL 时 `posts.series_id = NULL` 恒为 NULL，OR 自动退化为只看标签。
+	var seriesID any
+	if post.SeriesID != nil {
+		seriesID = *post.SeriesID
+	}
+
+	err := db.Raw(`
+		SELECT DISTINCT posts.*
+		FROM posts
+		WHERE posts.status = ? AND posts.deleted_at IS NULL AND posts.id <> ?
+		  AND (
+			posts.series_id = ?
+			OR EXISTS (
+				SELECT 1
+				FROM post_tags AS mine
+				JOIN post_tags AS other ON other.tag_id = mine.tag_id
+				WHERE mine.post_id = ? AND other.post_id = posts.id
+			)
+		  )
+		ORDER BY posts.published_at DESC, posts.id DESC
+		LIMIT ?`, PostStatusPublished, post.ID, seriesID, post.ID, limit).Scan(&posts).Error
+	if err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+// FindAdjacentPublishedPosts 返回按 published_at 相邻的上一篇与下一篇；
+// 仅同状态（published），边界返回 nil（§11）。
+func FindAdjacentPublishedPosts(db *gorm.DB, post *Post) (prev, next *Post, err error) {
+	if post.PublishedAt == nil {
+		return nil, nil, nil
+	}
+	at := *post.PublishedAt
+
+	var before Post
+	err = db.Where("status = ? AND deleted_at IS NULL AND (published_at < ? OR (published_at = ? AND id < ?))",
+		PostStatusPublished, at, at, post.ID).
+		Order("published_at DESC, id DESC").
+		Take(&before).Error
+	switch {
+	case err == nil:
+		prev = &before
+	case errors.Is(err, gorm.ErrRecordNotFound):
+	default:
+		return nil, nil, err
+	}
+
+	var after Post
+	err = db.Where("status = ? AND deleted_at IS NULL AND (published_at > ? OR (published_at = ? AND id > ?))",
+		PostStatusPublished, at, at, post.ID).
+		Order("published_at ASC, id ASC").
+		Take(&after).Error
+	switch {
+	case err == nil:
+		next = &after
+	case errors.Is(err, gorm.ErrRecordNotFound):
+	default:
+		return nil, nil, err
+	}
+	return prev, next, nil
+}
+
+// PublicCover 是公开列表项与详情的封面；URL 规则与媒体库一致（§10）。
+//
+// 没有封面时整个字段为 null；变体未生成时 variants 为空对象、url 给出 1600 的预期地址。
+type PublicCover struct {
+	SHA256   string            `json:"sha256"`
+	Ext      string            `json:"ext"`
+	Width    int               `json:"width"`
+	Height   int               `json:"height"`
+	Alt      string            `json:"alt"`
+	Blurhash string            `json:"blurhash"`
+	URL      string            `json:"url"`
+	OrigURL  string            `json:"origUrl"`
+	Variants map[string]string `json:"variants"`
+}
+
+// PostNeighbor 是详情里的上一篇 / 下一篇引用（§11）。
+type PostNeighbor struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+}
+
 // PublicPostListItem 是公开列表项；不包含正文（§12 列表与详情分离）。
 type PublicPostListItem struct {
 	ID           int64        `json:"id"`
@@ -299,6 +447,8 @@ type PublicPostListItem struct {
 	Title        string       `json:"title"`
 	Excerpt      string       `json:"excerpt"`
 	CoverMediaID *int64       `json:"coverMediaId"`
+	Cover        *PublicCover `json:"cover"`
+	Tags         []PostTagRef `json:"tags"`
 	PublishedAt  *dbtime.Unix `json:"publishedAt"`
 	UpdatedAt    dbtime.Unix  `json:"updatedAt"`
 	WordCount    int          `json:"wordCount"`
@@ -306,7 +456,7 @@ type PublicPostListItem struct {
 	IsPinned     bool         `json:"isPinned"`
 }
 
-// PublicListItem 把实体裁剪成公开列表项。
+// PublicListItem 把实体裁剪成公开列表项；封面与标签由 service 批量补齐。
 func (p Post) PublicListItem() PublicPostListItem {
 	return PublicPostListItem{
 		ID:           p.ID,
@@ -314,6 +464,7 @@ func (p Post) PublicListItem() PublicPostListItem {
 		Title:        p.Title,
 		Excerpt:      p.Excerpt,
 		CoverMediaID: p.CoverMediaID,
+		Tags:         make([]PostTagRef, 0),
 		PublishedAt:  p.PublishedAt,
 		UpdatedAt:    p.UpdatedAt,
 		WordCount:    p.WordCount,
@@ -325,14 +476,16 @@ func (p Post) PublicListItem() PublicPostListItem {
 // PublicPostDetail 是公开文章详情；只出 HTML，不出 Markdown 源码。
 type PublicPostDetail struct {
 	PublicPostListItem
-	ContentHTML    string `json:"contentHtml"`
-	SEOTitle       string `json:"seoTitle"`
-	SEODescription string `json:"seoDescription"`
-	CanonicalURL   string `json:"canonicalUrl"`
-	Lang           string `json:"lang"`
+	ContentHTML    string        `json:"contentHtml"`
+	SEOTitle       string        `json:"seoTitle"`
+	SEODescription string        `json:"seoDescription"`
+	CanonicalURL   string        `json:"canonicalUrl"`
+	Lang           string        `json:"lang"`
+	Prev           *PostNeighbor `json:"prev"`
+	Next           *PostNeighbor `json:"next"`
 }
 
-// PublicDetail 把实体裁剪成公开详情。
+// PublicDetail 把实体裁剪成公开详情；封面、标签与相邻文章由 service 补齐。
 func (p Post) PublicDetail() PublicPostDetail {
 	return PublicPostDetail{
 		PublicPostListItem: p.PublicListItem(),

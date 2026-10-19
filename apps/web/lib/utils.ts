@@ -24,6 +24,26 @@ const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 });
 
+/** `en-CA` 的短日期恰好是 `YYYY-MM-DD`，用来给 `<time datetime>` 与列表用。 */
+const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/**
+ * 把 Unix 秒格式化为 `YYYY-MM-DD`（站点时区 Asia/Shanghai）。
+ *
+ * 0 / null 表示"未设置"，返回破折号。
+ */
+export function formatDate(unix?: number | null): string {
+  if (!unix) {
+    return "—";
+  }
+  return dateFormatter.format(new Date(unix * 1000));
+}
+
 /**
  * 把 Unix 秒格式化为站点时区（Asia/Shanghai）的日期时间（agent.md §4）。
  *

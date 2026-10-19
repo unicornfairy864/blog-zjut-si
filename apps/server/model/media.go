@@ -81,6 +81,18 @@ func FindMediaByKeys(db *gorm.DB, keys []string) ([]Media, error) {
 	return items, nil
 }
 
+// FindMediaByIDs 按主键批量查询媒体；公开列表的封面一次取回，禁止 N+1（§12）。
+func FindMediaByIDs(db *gorm.DB, ids []int64) ([]Media, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	items := make([]Media, 0, len(ids))
+	if err := db.Where("id IN ?", ids).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ListMedia 按创建时间倒序返回一页媒体。
 func ListMedia(db *gorm.DB, limit, offset int) ([]Media, int64, error) {
 	var total int64

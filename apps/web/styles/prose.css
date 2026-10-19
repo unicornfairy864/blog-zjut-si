@@ -5,6 +5,8 @@
 
 .prose-blog {
   @apply text-base leading-7;
+  /* 长 URL / 长单词不撑破 375px 布局（§16 G4）。 */
+  overflow-wrap: break-word;
 }
 
 .prose-blog > * + * {
@@ -32,15 +34,41 @@
 }
 
 .prose-blog pre {
-  @apply overflow-x-auto rounded-lg bg-muted p-4 font-mono text-sm;
+  @apply relative overflow-x-auto rounded-lg bg-muted p-4 font-mono text-sm;
 }
 
 .prose-blog pre code {
   @apply bg-transparent p-0;
 }
 
+/* 代码块行号：chroma 输出 .line 时才生效，缺失则什么都不发生。 */
+.prose-blog pre.chroma code {
+  counter-reset: line;
+}
+
+.prose-blog pre.chroma .line::before {
+  @apply mr-3 inline-block w-6 select-none text-right text-muted-foreground;
+  counter-increment: line;
+  content: counter(line);
+}
+
+/* 复制按钮由 PostContent 在客户端注入；无 JS 时不出现，正文仍完整可读。 */
+.prose-blog .code-copy {
+  @apply absolute right-2 top-2 rounded border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground opacity-70 transition-opacity;
+}
+
+.prose-blog .code-copy:hover,
+.prose-blog .code-copy:focus-visible {
+  @apply opacity-100;
+}
+
+/* 「查看原图」包裹层：服务端给正文图片套的 <a class="media-orig">（§10）。 */
+.prose-blog a.media-orig {
+  @apply block no-underline;
+}
+
 .prose-blog img {
-  @apply mx-auto rounded-lg;
+  @apply mx-auto max-w-full rounded-lg;
 }
 
 .prose-blog table {
@@ -55,4 +83,8 @@
 /* 数学：服务端只输出占位 span，客户端 KaTeX 懒加载后替换（§11）。 */
 .prose-blog .math {
   @apply font-mono text-[0.95em];
+}
+
+.prose-blog .math-display {
+  @apply block overflow-x-auto py-2 text-center;
 }

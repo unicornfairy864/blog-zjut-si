@@ -330,3 +330,77 @@ curl -sI https://pan.example.com/public/blog/<文件名> | head -3
 注意博客容器自己写的文件（`/data/blog/uploads`）是 uid 1000、目录 0750/文件 0640，
 那是另一处 ACL，见 §10。
 
+---
+
+## 12. 公开端自测（D9–D10 / G4）
+
+容器起来后（`docker compose up -d`），先在容器里打接口，再上浏览器看版式：
+
+```bash
+# 1) 分页：第 2 页与第 1 页内容不同，total 一致
+curl -s 'http://127.0.0.1:8640/api/posts?page=1&pageSize=10' | head -c 300
+curl -s 'http://127.0.0.1:8640/api/posts?page=2&pageSize=10' | head -c 300
+
+# 2) 标签组合：/tags 里的 count 与该标签详情页的 total 一致
+curl -s http://127.0.0.1:8640/api/tags
+curl -s http://127.0.0.1:8640/api/tags/<slug>
+
+# 3) 归档按年/月分组，条目数与 /api/site 的 counts.posts 一致
+curl -s http://127.0.0.1:8640/api/archive | head -c 400
+
+# 4) 404 / 410 看的是 HTML 层（不是 API 层）
+curl -sI http://127.0.0.1:8640/posts/不存在的slug | head -1    # 期望 404
+curl -sI http://127.0.0.1:8640/posts/<已归档slug> | head -1    # 期望 410
+
+# 5) srcset 生效：详情 HTML 里图片带 4 档候选
+curl -s http://127.0.0.1:8640/posts/<slug> | grep -o 'srcset="[^"]*"' | head -2
+
+# 6) 系列 / 友链 / 关于（静态页）
+curl -s http://127.0.0.1:8640/api/series
+curl -s http://127.0.0.1:8640/api/links
+curl -s http://127.0.0.1:8640/api/pages/about
+```
+
+浏览器侧：DevTools 切到 375px（iPhone SE），逐页确认**没有横向滚动条**；正文图片点开应打开原图
+（配了 `BLOG_CLOUDREVE_PUBLIC_BASE_URL` 时指向图床）。
+
+### 12.1 测试数据从哪来
+
+标签 / 系列 / 友链 / 静态页的管理端界面还没做（排在 D13–D14），D9–D10 验收时先用 sqlite3
+直接塞数据。**先停容器**（避免 WAL 半写），改完再起：
+
+```bash
+cd /srv/blog/deploy && docker compose stop
+sqlite3 /data/blog/db/blog.db <<'SQL'
+-- 标签：给一篇文章挂上 Go 标签
+INSERT INTO tags (name, slug, description, created_at)
+  VALUES ('Go', 'go', '', strftime('%s','now'));
+INSERT INTO post_tags (post_id, tag_id)
+  VALUES ((SELECT id FROM posts WHERE status='published' ORDER BY published_at DESC LIMIT 1),
+          (SELECT id FROM tags WHERE slug='go'));
+
+-- 系列：把同一篇文章放进系列
+INSERT INTO series (name, slug, description, created_at)
+  VALUES ('从零写博客', 'blog-from-scratch', '', strftime('%s','now'));
+UPDATE posts
+   SET series_id = (SELECT id FROM series WHERE slug='blog-from-scratch'), series_order = 1
+ WHERE id = (SELECT id FROM posts WHERE status='published' ORDER BY published_at DESC LIMIT 1);
+
+-- 友链（status 只有 active / hidden，默认 active 即公开可见）
+INSERT INTO links (name, url, avatar, description, sort, status, created_at)
+  VALUES ('Cloudreve', 'https://pan.zjut.si', '', '自建图床', 1, 'active', strftime('%s','now'));
+
+-- 静态页 /about
+INSERT INTO pages (slug, title, content_md, content_html, content_text,
+                   seo_title, seo_description, created_at, updated_at)
+  VALUES ('about', '关于',
+          '## 关于本站',
+          '<h2 id="about">关于本站</h2><p>本站是个人技术博客。</p>',
+          '关于本站 本站是个人技术博客。', '', '',
+          strftime('%s','now'), strftime('%s','now'));
+SQL
+docker compose start
+```
+
+塞完数据后 `curl -s http://127.0.0.1:8640/api/tags` 应能看到 `go`，`/about` 页面也能打开。
+

@@ -458,15 +458,28 @@ var mediaImgTagRe = regexp.MustCompile(`(?i)<img\b[^>]*>`)
 // mediaImgSrcRe 取出 img 标签的 src 属性值。
 var mediaImgSrcRe = regexp.MustCompile(`(?i)\bsrc\s*=\s*"([^"]*)"`)
 
-// DecorateOriginals 给正文里的本站图片包上「查看原图」链接（§10）。
+// mediaContentSizes 是正文图片的 sizes：桌面端正文最宽 768px（max-w-3xl），窄屏铺满。
+const mediaContentSizes = "(min-width: 1024px) 768px, 100vw"
+
+// contentImage 是正文里一张本站图片的装饰信息。
+type contentImage struct {
+	origURL string
+	srcSet  string
+	width   int
+	height  int
+}
+
+// DecorateContent 给正文里的本站图片补响应式属性并包上「查看原图」链接（§10 / §11）。
 //
-// 只有图床启用、配置了 public_base_url、且该图已归档时才包链接，其余情况原样返回；
-// 链接是读取时现算的，所以归档晚于发布也不会漏。
-func (s MediaService) DecorateOriginals(contentHTML string) string {
+// 读取时现算，所以归档晚于发布、变体后生成都不会漏：
+//   - `srcset` 用该图的四档变体（不足两档不输出），`width`/`height` 防抖动，
+//     `loading="lazy"`/`decoding="async"` 默认加上；
+//   - 图床启用且配置了 `public_base_url`、该图已归档时，外面包一层
+//     `<a class="media-orig" href="{public_base_url}/{sha256}.{ext}">`。
+//
+// 媒体表里查不到、或正文里的图片不是本站上传的，一律原样保留。
+func (s MediaService) DecorateContent(contentHTML string) string {
 	if contentHTML == "" || !strings.Contains(contentHTML, "<img") {
-		return contentHTML
-	}
-	if cloudrevePublicBase() == "" {
 		return contentHTML
 	}
 
@@ -490,13 +503,19 @@ func (s MediaService) DecorateOriginals(contentHTML string) string {
 	if err != nil {
 		return contentHTML
 	}
-	origByKey := make(map[string]string, len(items))
+
+	base := s.baseURL()
+	images := make(map[string]contentImage, len(items))
 	for i := range items {
-		if url := origURL(&items[i]); url != "" {
-			origByKey[items[i].StorageKey] = url
+		item := toMediaItem(&items[i], base)
+		images[items[i].StorageKey] = contentImage{
+			origURL: item.OrigURL,
+			srcSet:  buildContentSrcSet(item.Variants),
+			width:   item.Width,
+			height:  item.Height,
 		}
 	}
-	if len(origByKey) == 0 {
+	if len(images) == 0 {
 		return contentHTML
 	}
 
@@ -509,13 +528,60 @@ func (s MediaService) DecorateOriginals(contentHTML string) string {
 		if key == nil {
 			return tag
 		}
-		url, ok := origByKey[key[1]+"/"+key[2]]
+		image, ok := images[key[1]+"/"+key[2]]
 		if !ok {
 			return tag
 		}
-		return `<a class="media-orig" href="` + html.EscapeString(url) +
-			`" target="_blank" rel="noopener noreferrer">` + tag + `</a>`
+		return wrapContentImage(tag, image)
 	})
+}
+
+// buildContentSrcSet 用四档变体拼 srcset；不足两档时返回空串（不输出该属性）。
+func buildContentSrcSet(variants map[string]string) string {
+	parts := make([]string, 0, len(mediaVariantTiers))
+	for _, tier := range mediaVariantTiers {
+		url, ok := variants[strconv.Itoa(tier)]
+		if !ok || url == "" {
+			continue
+		}
+		parts = append(parts, url+" "+strconv.Itoa(tier)+"w")
+	}
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts, ", ")
+}
+
+// wrapContentImage 往 img 标签里补属性，必要时再包一层原图链接。
+func wrapContentImage(tag string, image contentImage) string {
+	lower := strings.ToLower(tag)
+	attrs := make([]string, 0, 5)
+	if image.srcSet != "" && !strings.Contains(lower, "srcset=") {
+		attrs = append(attrs,
+			`srcset="`+html.EscapeString(image.srcSet)+`"`,
+			`sizes="`+mediaContentSizes+`"`)
+	}
+	if image.width > 0 && !strings.Contains(lower, "width=") {
+		attrs = append(attrs, `width="`+strconv.Itoa(image.width)+`"`)
+	}
+	if image.height > 0 && !strings.Contains(lower, "height=") {
+		attrs = append(attrs, `height="`+strconv.Itoa(image.height)+`"`)
+	}
+	if !strings.Contains(lower, "loading=") {
+		attrs = append(attrs, `loading="lazy"`, `decoding="async"`)
+	}
+
+	enriched := tag
+	if len(attrs) > 0 {
+		// 渲染管线输出的是 `<img …>`（非自闭合），这里统一收敛成标准写法。
+		body := strings.TrimSuffix(strings.TrimSpace(strings.TrimSuffix(tag, ">")), "/")
+		enriched = body + " " + strings.Join(attrs, " ") + ">"
+	}
+	if image.origURL == "" {
+		return enriched
+	}
+	return `<a class="media-orig" href="` + html.EscapeString(image.origURL) +
+		`" target="_blank" rel="noopener noreferrer">` + enriched + `</a>`
 }
 
 // HandleProcess 是 media_process 的调度器入口。

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/global"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model"
@@ -39,6 +41,31 @@ func (SettingService) PutString(key, value string) error {
 		return fmt.Errorf("写入设置 %s 失败: %w", key, err)
 	}
 	return nil
+}
+
+// Int64 读取整数型设置；键缺失时返回 fallback。
+//
+// value_json 允许 JSON 数字（如 content_version 的 1）或数字字符串，两种都兼容。
+func (SettingService) Int64(key string, fallback int64) (int64, error) {
+	setting, err := model.GetSetting(global.DB, key)
+	if err != nil {
+		if errors.Is(err, model.ErrNotFound) {
+			return fallback, nil
+		}
+		return 0, fmt.Errorf("读取设置 %s 失败: %w", key, err)
+	}
+
+	var number int64
+	if err := json.Unmarshal([]byte(setting.ValueJSON), &number); err == nil {
+		return number, nil
+	}
+	var text string
+	if err := json.Unmarshal([]byte(setting.ValueJSON), &text); err == nil {
+		if parsed, parseErr := strconv.ParseInt(strings.TrimSpace(text), 10, 64); parseErr == nil {
+			return parsed, nil
+		}
+	}
+	return 0, fmt.Errorf("设置 %s 不是 JSON 整数", key)
 }
 
 // BumpContentVersion 递增 content_version（公开读接口的 ETag 依赖它）。

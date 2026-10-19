@@ -34,7 +34,15 @@
       {
         "id": 1, "slug": "hello", "title": "你好", "excerpt": "……",
         "coverMediaId": null, "publishedAt": 1760000000, "updatedAt": 1760000000,
-        "wordCount": 1024, "readingTime": 4, "isPinned": false
+        "wordCount": 1024, "readingTime": 4, "isPinned": false,
+        "cover": {
+          "sha256": "786a8d…", "ext": "jpg", "width": 2400, "height": 1200,
+          "alt": "示例图", "blurhash": "L6Pj0^…",
+          "url": "/uploads/78/786a8d…/1600.webp",
+          "origUrl": "https://pan.example.com/public/blog/786a8d….jpg",
+          "variants": { "480": "…/480.webp", "960": "…/960.webp", "1600": "…/1600.webp", "2400": "…/2400.webp" }
+        },
+        "tags": [{ "name": "Go", "slug": "go" }]
       }
     ],
     "total": 1, "page": 1, "pageSize": 20
@@ -43,20 +51,155 @@
 }
 ```
 
+`cover` 无封面时为 `null`；`variants` 与 `url` 的规则同媒体库（`img_base_url` 为空时用相对路径）。
+列表、搜索、标签、系列、相关文章返回的都是这个列表项，`prev` / `next` 只在详情里出现。
+
 ### `GET /api/posts/{slug}`
 
 已发布文章详情，返回服务端渲染好的 `contentHtml`（不含 Markdown 源码）。
+在列表项字段之外，详情还带 `contentHtml`、`seoTitle`、`seoDescription`、`canonicalUrl`、`lang`、
+`prev` / `next`（按 `published_at` 相邻，仅 published，边界为 `null`）。
 
 配了 `cloudreve.public_base_url` 时，`contentHtml` 里的本站图片会在返回时被包上一层
 「查看原图」链接（`<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank"
 rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返回，所以 `contentHtml` 的内容会随
 归档进度变化（ETag 按最终响应体计算，不会出现脏缓存）。
 
+同一处还会给正文里的本站图片补 `srcset`（该图的四档变体，不足两档不输出）、`sizes`、
+`width`/`height` 与 `loading="lazy" decoding="async"`；`media` 表里查不到的图片原样保留。
+
 | HTTP | code | 场景 |
 | --- | --- | --- |
 | 200 | 0 | 已发布 |
 | 404 | 1002 | 不存在 / 草稿 / 定时（不泄露存在性） |
 | 410 | 1007 | 已归档 / 已删除 |
+
+### `GET /api/posts/{slug}/related`
+
+相关文章（同标签或同系列，排除自身，最多 6 篇，按发布时间倒序）。
+
+```json
+{ "code": 0, "data": { "list": [ /* 公开列表项 */ ] }, "msg": "操作成功" }
+```
+
+### `GET /api/site`
+
+站点级信息：`settings` 派生的时区 / 图片前缀 / 内容版本，加上公开计数。
+
+```json
+{
+  "code": 0,
+  "data": {
+    "timezone": "Asia/Shanghai", "imgBaseUrl": "/uploads", "contentVersion": 1,
+    "counts": { "posts": 12, "tags": 3, "series": 2, "links": 5 }
+  },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/tags`
+
+标签云；只含有已发布文章的标签，按文章数降序、名称升序。
+
+```json
+{
+  "code": 0,
+  "data": { "list": [{ "id": 1, "name": "Go", "slug": "go", "description": "", "count": 7 }] },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/tags/{slug}`
+
+标签详情：`tag` + 该标签下的分页文章。标签不存在 → `404 / 1002`。
+
+```json
+{
+  "code": 0,
+  "data": {
+    "tag": { "id": 1, "name": "Go", "slug": "go", "description": "" },
+    "list": [ /* 公开列表项 */ ], "total": 7, "page": 1, "pageSize": 20
+  },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/archive`
+
+按年 / 月分组的已发布文章；年、月均倒序。
+
+```json
+{
+  "code": 0,
+  "data": {
+    "total": 12,
+    "years": [
+      {
+        "year": 2026, "count": 8,
+        "months": [
+          { "month": 10, "count": 3,
+            "posts": [{ "id": 1, "slug": "x", "title": "X", "publishedAt": 1760000000 }] }
+        ]
+      }
+    ]
+  },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/series`
+
+系列列表（带已发布文章数）。
+
+```json
+{
+  "code": 0,
+  "data": { "list": [{ "id": 1, "name": "从零写博客", "slug": "blog-from-scratch", "description": "", "count": 6 }] },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/series/{slug}`
+
+系列详情；文章按 `series_order` 升序、其次发布时间升序。系列不存在 → `404 / 1002`。
+
+```json
+{
+  "code": 0,
+  "data": {
+    "series": { "id": 1, "name": "从零写博客", "slug": "blog-from-scratch", "description": "" },
+    "list": [ /* 公开列表项 */ ], "total": 6
+  },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/links`
+
+友链；只出 `status='active'` 的记录（取值 `active` / `hidden`），按 `sort` 升序、`id` 升序。
+
+```json
+{
+  "code": 0,
+  "data": { "list": [{ "id": 1, "name": "Cloudreve", "url": "https://pan.zjut.si", "avatar": "", "description": "" }] },
+  "msg": "操作成功"
+}
+```
+
+### `GET /api/pages/{slug}`
+
+静态页（`/about` 等）。不存在 → `404 / 1002`；软删 → `410 / 1007`。
+
+```json
+{
+  "code": 0,
+  "data": {
+    "slug": "about", "title": "关于", "contentHtml": "<p>…</p>",
+    "seoTitle": "", "seoDescription": "", "updatedAt": 1760000000
+  },
+  "msg": "操作成功"
+}
+```
 
 ### `GET /api/search?q=关键词`
 

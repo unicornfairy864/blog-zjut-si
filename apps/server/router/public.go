@@ -25,7 +25,18 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 		// 公开文章与搜索（D6）：只读，全部带强 ETag（§5 / §12）。
 		api.GET("/posts", v1.ApiGroupApp.Public.Post.List)
 		api.GET("/posts/:slug", v1.ApiGroupApp.Public.Post.Detail)
+		api.GET("/posts/:slug/related", v1.ApiGroupApp.Public.Post.Related)
 		api.GET("/search", v1.ApiGroupApp.Public.Post.Search)
+
+		// 公开只读聚合（D9–D10）：站点信息、标签、归档、系列、友链与静态页。
+		api.GET("/site", v1.ApiGroupApp.Public.Site.Detail)
+		api.GET("/tags", v1.ApiGroupApp.Public.Tag.List)
+		api.GET("/tags/:slug", v1.ApiGroupApp.Public.Tag.Detail)
+		api.GET("/archive", v1.ApiGroupApp.Public.Archive.Detail)
+		api.GET("/series", v1.ApiGroupApp.Public.Series.List)
+		api.GET("/series/:slug", v1.ApiGroupApp.Public.Series.Detail)
+		api.GET("/links", v1.ApiGroupApp.Public.Link.List)
+		api.GET("/pages/:slug", v1.ApiGroupApp.Public.Page.Detail)
 	}
 
 	engine.NoRoute(func(c *gin.Context) {
