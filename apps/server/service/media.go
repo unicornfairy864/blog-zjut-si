@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +82,7 @@ type MediaItem struct {
 	Status       string            `json:"status"`
 	Error        string            `json:"error"`
 	URL          string            `json:"url"`
+	OrigURL      string            `json:"origUrl"`
 	Variants     map[string]string `json:"variants"`
 	CreatedAt    dbtime.Unix       `json:"createdAt"`
 	UpdatedAt    dbtime.Unix       `json:"updatedAt"`
@@ -330,7 +333,10 @@ func (s MediaService) Process(mediaID int64) error {
 	return nil
 }
 
-// Archive 把原图推送到 Cloudreve 的 WebDAV 目录，并记录归档时间（§10 步骤 6）。
+// Archive 把原图与四档变体推送到 Cloudreve 的 WebDAV 目录，并记录归档时间（§10 步骤 6）。
+//
+// 远端文件名固定为 `{sha256}.{ext}`（原图）与 `{sha256}_{480,960,1600,2400}.webp`（变体），
+// 因此图床侧的 FileNameRule 必须是 {originname}，否则公开直链无法由博客算出（runbook §11.5）。
 func (s MediaService) Archive(mediaID int64) error {
 	config := global.Config.Cloudreve
 	if !config.Enabled {
@@ -343,15 +349,31 @@ func (s MediaService) Archive(mediaID int64) error {
 	}
 
 	store := storage.Local{Root: global.Config.Upload.Dir}
+	items := make([]archiveFile, 0, 1+len(mediaVariantTiers))
+
 	originalPath, err := store.Path(media.StorageKey + "/original." + media.Ext)
 	if err != nil {
 		return fmt.Errorf("生成原图路径失败: %w", err)
 	}
-	file, err := os.Open(originalPath)
-	if err != nil {
-		return fmt.Errorf("读取原图失败: %w", err)
+	items = append(items, archiveFile{local: originalPath, remote: media.SHA256 + "." + media.Ext})
+
+	if config.ArchiveVariants {
+		variants := mediaVariantFiles(media)
+		for _, tier := range mediaVariantTiers {
+			name := strconv.Itoa(tier)
+			if _, ok := variants[name]; !ok {
+				continue
+			}
+			variantPath, pathErr := store.Path(media.StorageKey + "/" + name + ".webp")
+			if pathErr != nil {
+				return fmt.Errorf("生成变体路径失败: %w", pathErr)
+			}
+			items = append(items, archiveFile{
+				local:  variantPath,
+				remote: media.SHA256 + "_" + name + ".webp",
+			})
+		}
 	}
-	defer func() { _ = file.Close() }()
 
 	client := gowebdav.NewClient(config.WebDAVURL, config.Username, config.Password)
 	client.SetTimeout(config.Timeout())
@@ -359,9 +381,19 @@ func (s MediaService) Archive(mediaID int64) error {
 		return fmt.Errorf("创建图床目录失败: %w", err)
 	}
 
-	remote := path.Join(config.BasePath, media.SHA256+"."+media.Ext)
-	if err := client.WriteStream(remote, file, 0o644); err != nil {
-		return fmt.Errorf("上传原图到图床失败: %w", err)
+	uploaded := make([]string, 0, len(items))
+	for _, item := range items {
+		file, openErr := os.Open(item.local)
+		if openErr != nil {
+			return fmt.Errorf("读取待归档文件失败: %w", openErr)
+		}
+		remote := path.Join(config.BasePath, item.remote)
+		writeErr := client.WriteStream(remote, file, 0o644)
+		_ = file.Close()
+		if writeErr != nil {
+			return fmt.Errorf("上传 %s 到图床失败: %w", item.remote, writeErr)
+		}
+		uploaded = append(uploaded, remote)
 	}
 
 	now := dbtime.Now()
@@ -377,9 +409,113 @@ func (s MediaService) Archive(mediaID int64) error {
 		Action:     AuditActionMediaArchive,
 		TargetType: "media",
 		TargetID:   strconv.FormatInt(media.ID, 10),
-		Meta:       map[string]any{"remote": remote},
+		Meta:       map[string]any{"remote": path.Join(config.BasePath, media.SHA256+"."+media.Ext), "files": uploaded},
 	})
 	return nil
+}
+
+// archiveFile 是一个待推送的本地文件与其远端文件名。
+type archiveFile struct {
+	local  string
+	remote string
+}
+
+// mediaVariantFiles 解析 variants_json，返回档位到文件名的映射。
+func mediaVariantFiles(media *model.Media) map[string]string {
+	files := map[string]string{}
+	if media.VariantsJSON != "" {
+		_ = json.Unmarshal([]byte(media.VariantsJSON), &files)
+	}
+	return files
+}
+
+// cloudrevePublicBase 返回图床的匿名直出前缀；未启用或未配置时返回空串。
+func cloudrevePublicBase() string {
+	config := global.Config.Cloudreve
+	if !config.Enabled {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(config.PublicBaseURL), "/")
+}
+
+// origURL 返回原图的公开直链；要求已归档且配置了 public_base_url。
+//
+// 图床的 FileNameRule 必须是 {originname}，否则这里算出的地址与实际文件名不一致。
+func origURL(media *model.Media) string {
+	base := cloudrevePublicBase()
+	if base == "" || !media.OrigArchived || media.SHA256 == "" {
+		return ""
+	}
+	return base + "/" + media.SHA256 + "." + media.Ext
+}
+
+// mediaUploadsSrcRe 匹配本站图片地址里的 storage_key（{sha[:2]}/{sha256}）。
+var mediaUploadsSrcRe = regexp.MustCompile(`uploads/([0-9a-f]{2})/([0-9a-f]{64})/`)
+
+// mediaImgTagRe 匹配渲染后的 <img ...>；正文经 bluemonday 过滤，属性值里不会出现 '>'。
+var mediaImgTagRe = regexp.MustCompile(`(?i)<img\b[^>]*>`)
+
+// mediaImgSrcRe 取出 img 标签的 src 属性值。
+var mediaImgSrcRe = regexp.MustCompile(`(?i)\bsrc\s*=\s*"([^"]*)"`)
+
+// DecorateOriginals 给正文里的本站图片包上「查看原图」链接（§10）。
+//
+// 只有图床启用、配置了 public_base_url、且该图已归档时才包链接，其余情况原样返回；
+// 链接是读取时现算的，所以归档晚于发布也不会漏。
+func (s MediaService) DecorateOriginals(contentHTML string) string {
+	if contentHTML == "" || !strings.Contains(contentHTML, "<img") {
+		return contentHTML
+	}
+	if cloudrevePublicBase() == "" {
+		return contentHTML
+	}
+
+	matches := mediaUploadsSrcRe.FindAllStringSubmatch(contentHTML, -1)
+	if len(matches) == 0 {
+		return contentHTML
+	}
+
+	keys := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		key := match[1] + "/" + match[2]
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	items, err := model.FindMediaByKeys(global.DB, keys)
+	if err != nil {
+		return contentHTML
+	}
+	origByKey := make(map[string]string, len(items))
+	for i := range items {
+		if url := origURL(&items[i]); url != "" {
+			origByKey[items[i].StorageKey] = url
+		}
+	}
+	if len(origByKey) == 0 {
+		return contentHTML
+	}
+
+	return mediaImgTagRe.ReplaceAllStringFunc(contentHTML, func(tag string) string {
+		src := mediaImgSrcRe.FindStringSubmatch(tag)
+		if src == nil {
+			return tag
+		}
+		key := mediaUploadsSrcRe.FindStringSubmatch(src[1])
+		if key == nil {
+			return tag
+		}
+		url, ok := origByKey[key[1]+"/"+key[2]]
+		if !ok {
+			return tag
+		}
+		return `<a class="media-orig" href="` + html.EscapeString(url) +
+			`" target="_blank" rel="noopener noreferrer">` + tag + `</a>`
+	})
 }
 
 // HandleProcess 是 media_process 的调度器入口。
@@ -568,10 +704,7 @@ func parseMediaJob(job *model.Job) (int64, error) {
 
 // toMediaItem 解析 variants_json 并拼出可访问 URL。
 func toMediaItem(media *model.Media, base string) MediaItem {
-	variants := map[string]string{}
-	if media.VariantsJSON != "" {
-		_ = json.Unmarshal([]byte(media.VariantsJSON), &variants)
-	}
+	variants := mediaVariantFiles(media)
 
 	urls := make(map[string]string, len(variants))
 	preferred := ""
@@ -602,6 +735,7 @@ func toMediaItem(media *model.Media, base string) MediaItem {
 		Status:       media.Status,
 		Error:        media.Error,
 		URL:          preferred,
+		OrigURL:      origURL(media),
 		Variants:     urls,
 		CreatedAt:    media.CreatedAt,
 		UpdatedAt:    media.UpdatedAt,

@@ -16,6 +16,8 @@ export interface MediaItem {
   status: string;
   error: string;
   url: string;
+  /** 图床上的原图直链；未启用图床或尚未归档时为空串。 */
+  origUrl: string;
   variants: Record<string, string>;
   createdAt: number;
   updatedAt: number;

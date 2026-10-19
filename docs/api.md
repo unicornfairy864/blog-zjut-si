@@ -47,6 +47,11 @@
 
 已发布文章详情，返回服务端渲染好的 `contentHtml`（不含 Markdown 源码）。
 
+配了 `cloudreve.public_base_url` 时，`contentHtml` 里的本站图片会在返回时被包上一层
+「查看原图」链接（`<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank"
+rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返回，所以 `contentHtml` 的内容会随
+归档进度变化（ETag 按最终响应体计算，不会出现脏缓存）。
+
 | HTTP | code | 场景 |
 | --- | --- | --- |
 | 200 | 0 | 已发布 |
@@ -125,6 +130,7 @@
   "bytes": 177841, "width": 2400, "height": 1200, "pixels": 2880000,
   "alt": "示例图", "blurhash": "L6Pj0^…", "status": "ready", "error": "",
   "url": "/uploads/78/786a8d…/1600.webp",
+  "origUrl": "https://pan.example.com/public/blog/786a8d….jpg",
   "variants": {
     "480": "/uploads/78/786a8d…/480.webp",
     "960": "/uploads/78/786a8d…/960.webp",
@@ -137,6 +143,10 @@
 
 上传立即返回 `status: "processing"`，后台任务生成四档 WebP 与 blurhash 后变 `ready`；
 客户端轮询 `GET /api/admin/media` 即可。`failed` 时 `error` 有原因、可 `retry`。
+
+`origUrl` 是图床上的原图直链，只有图床启用、配置了 `cloudreve.public_base_url`、且该图
+归档完成时才非空；否则是空串。它要求图床存储策略的「文件名规则」为 `{originname}`
+（见 `docs/runbook.md` §11.5）。
 
 `img_base_url` 为空时 URL 是相对路径 `/uploads/…`（公开站由 nginx 直出；
 管理端 8641 直出 `/uploads/*` 供媒体库与编辑器预览）。

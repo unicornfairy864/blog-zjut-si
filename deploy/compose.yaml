@@ -26,12 +26,14 @@ services:
       # 首次启动且 admins 表为空时创建账号；建好后可从此处删除。
       BLOG_ADMIN_USERNAME: "${BLOG_ADMIN_USERNAME:-}"
       BLOG_ADMIN_PASSWORD: "${BLOG_ADMIN_PASSWORD:-}"
-      # 图床（Cloudreve WebDAV）：原图归档；不启用时跳过归档。
+      # 图床（Cloudreve WebDAV）：原图与四档变体归档；不启用时跳过归档。
       BLOG_CLOUDREVE_ENABLED: "${BLOG_CLOUDREVE_ENABLED:-false}"
       BLOG_CLOUDREVE_WEBDAV_URL: "${BLOG_CLOUDREVE_WEBDAV_URL:-}"
       BLOG_CLOUDREVE_USERNAME: "${BLOG_CLOUDREVE_USERNAME:-}"
       BLOG_CLOUDREVE_PASSWORD: "${BLOG_CLOUDREVE_PASSWORD:-}"
       BLOG_CLOUDREVE_BASE_PATH: "${BLOG_CLOUDREVE_BASE_PATH:-/blog}"
+      BLOG_CLOUDREVE_PUBLIC_BASE_URL: "${BLOG_CLOUDREVE_PUBLIC_BASE_URL:-}"
+      BLOG_CLOUDREVE_ARCHIVE_VARIANTS: "${BLOG_CLOUDREVE_ARCHIVE_VARIANTS:-true}"
     volumes:
       - /data/blog/db:/data/blog/db
       - /data/blog/uploads:/data/blog/uploads

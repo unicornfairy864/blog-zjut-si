@@ -69,6 +69,18 @@ func FindMediaBySHA(db *gorm.DB, sha string) (*Media, error) {
 	return &media, nil
 }
 
+// FindMediaByKeys 按 storage_key 批量查询媒体（正文图片装饰用）。
+func FindMediaByKeys(db *gorm.DB, keys []string) ([]Media, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	items := make([]Media, 0, len(keys))
+	if err := db.Where("storage_key IN ?", keys).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ListMedia 按创建时间倒序返回一页媒体。
 func ListMedia(db *gorm.DB, limit, offset int) ([]Media, int64, error) {
 	var total int64

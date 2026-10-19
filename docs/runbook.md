@@ -135,10 +135,12 @@ docker compose start blog
 | `BLOG_AUTH_COOKIE_SECURE` | `false` | 隧道走 http，保持 false |
 | `BLOG_LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 | `BLOG_TASK_ENABLED` | `true` | 调度器开关 |
-| `BLOG_CLOUDREVE_ENABLED` | `false` | 是否启用原图归档 |
+| `BLOG_CLOUDREVE_ENABLED` | `false` | 是否启用归档（原图 + 四档变体） |
 | `BLOG_CLOUDREVE_WEBDAV_URL` | 空 | Cloudreve WebDAV 地址（如 `https://pan.example.com/dav`） |
 | `BLOG_CLOUDREVE_USERNAME` / `BLOG_CLOUDREVE_PASSWORD` | 空 | WebDAV 账号；口令含 `$` 时在 `.env` 写成 `$$` |
-| `BLOG_CLOUDREVE_BASE_PATH` | `/blog` | 远端目录，原图写成 `{base}/{sha256}.{ext}` |
+| `BLOG_CLOUDREVE_BASE_PATH` | `/blog` | 远端目录（相对 WebDAV 账号根目录），原图写成 `{base}/{sha256}.{ext}` |
+| `BLOG_CLOUDREVE_PUBLIC_BASE_URL` | 空 | 图床匿名直出前缀（如 `https://pan.example.com/public/blog`）；填了才给正文图片加「查看原图」链接 |
+| `BLOG_CLOUDREVE_ARCHIVE_VARIANTS` | `true` | 四档 WebP 变体是否也推上图床 |
 | `BLOG_CONFIG` | 空 | 显式指定配置文件 |
 | `BLOG_MIGRATE_ONLY` | 空 | 设为 `1` 时只迁移后退出 |
 | `BLOG_ADMIN_USERNAME` / `BLOG_ADMIN_PASSWORD` | 空 | 首次引导创建管理员 |
@@ -178,7 +180,8 @@ sudo certbot renew --dry-run                # 每月演练
 ## 11. 图床：Cloudreve WebDAV 归档（D8）
 
 本站的图片**不在图床上直接对外提供**：公开站由 nginx 直出本机 `/data/blog/uploads`，
-Cloudreve 只保存**原图归档**（§10），用于 30 天后清理本地原图、以及原图长期留存。
+Cloudreve 保存**原图 + 四档变体归档**（§10），用于 30 天后清理本地原图、以及原图长期留存；
+配了 `public_base_url` 后，正文图片的「查看原图」直链也指向图床上的原图。
 
 ### 11.1 Cloudreve 侧
 
@@ -186,7 +189,11 @@ Cloudreve 只保存**原图归档**（§10），用于 30 天后清理本地原�
 2. 右上角头像 → **WebDAV 账号**，新建一个账号：
    - 目录权限只勾 `/blog`，不要给整盘；
    - 记下 WebDAV 用户名与密码。
-3. WebDAV 地址通常是 `https://<你的域名>/dav`（Cloudreve v3/v4 默认路径）。
+   - 账号的**根目录**决定了 `BASE_PATH` 的基准：根目录设成网盘的 `public`，则 `BASE_PATH=/blog`
+     落到 `public/blog`。
+3. 存储策略的**文件名规则必须是 `{originname}`**（不能含 `{uuid}`/`{randomkey8}` 这类随机段），
+   否则博客算不出直链；同时 nginx 直出的目录权限要放开，否则一律 `403`。见 §11.5。
+4. WebDAV 地址通常是 `https://<你的域名>/dav`（Cloudreve v3/v4 默认路径）。
    先手工验证一次：
    ```bash
    curl -u '用户名:口令' -X PROPFIND https://pan.example.com/dav/blog -H 'Depth: 0'
@@ -203,7 +210,15 @@ BLOG_CLOUDREVE_WEBDAV_URL=https://pan.example.com/dav
 BLOG_CLOUDREVE_USERNAME=blog-archive
 BLOG_CLOUDREVE_PASSWORD=your-password
 BLOG_CLOUDREVE_BASE_PATH=/blog
+# 图床匿名直出前缀；留空则不产出「查看原图」链接
+BLOG_CLOUDREVE_PUBLIC_BASE_URL=https://pan.example.com/public/blog
+# 四档变体是否也推上图床
+BLOG_CLOUDREVE_ARCHIVE_VARIANTS=true
 ```
+
+`BLOG_CLOUDREVE_BASE_PATH` 是**相对 WebDAV 账号根目录**的路径：账号根目录若已设为网盘的
+`public` 目录，这里填 `/blog` 就会落到 `public/blog`，直出地址就是
+`https://pan.example.com/public/blog/…`（见 §11.5 的命名与权限要求）。
 
 口令包含 `$` 时必须写成 `$$`（compose 会先做变量插值）。改完：
 
@@ -221,21 +236,32 @@ docker compose logs --tail=50 blog
    docker compose exec blog sh -c 'true'   # 容器内没有 sqlite3，任务状态用 API 或日志看
    docker compose logs --tail=100 blog | grep media_archive
    ```
-3. Cloudreve 的 `/blog` 下应出现 `{sha256}.jpg`（或原扩展名）。
-4. 本地原图仍在（30 天保留期，`cleanup` 在 D14 接入）：
+3. Cloudreve 的 `/blog` 下应出现 5 个文件（原图 + 四档变体）：
+   ```
+   {sha256}.jpg  {sha256}_480.webp  {sha256}_960.webp  {sha256}_1600.webp  {sha256}_2400.webp
+   ```
+   只想归档原图就设 `BLOG_CLOUDREVE_ARCHIVE_VARIANTS=false`。
+4. 配了 `BLOG_CLOUDREVE_PUBLIC_BASE_URL` 时，直链应能匿名读到（`200`；`403` 是目录权限没放开、
+   `404` 是文件名规则不是 `{originname}`，见 §11.5）：
+   ```bash
+   curl -sI https://pan.example.com/public/blog/{sha256}.jpg | head -3
+   ```
+   媒体库里该图会多出「复制原图链接」按钮，公开详情返回的 `contentHtml` 里图片会被包上
+   `<a class="media-orig" …>`。
+5. 本地原图仍在（30 天保留期，`cleanup` 在 D14 接入）：
    ```bash
    ls -l /data/blog/uploads/*/*/original.*
    ```
 
 归档失败时任务会按 1m / 5m / 15m 退避重试 3 次，之后 `jobs.status=failed`；
 日志里搜 `任务失败`，常见原因是 WebDAV 地址少了 `/dav`、账号没给 `/blog` 写权限、
-或口令里的 `$` 没转义。
+或口令里的 `$` 没转义。变体推送失败与原因同理，看 `media_archive` 那条日志里的文件名。
 
 ### 11.4 不启用会怎样
 
-`BLOG_CLOUDREVE_ENABLED=false` 时上传、四档变体、媒体库全部照常工作，只是不推原图。
-之后想补归档：把开关打开并重建容器，然后在媒体库对每张图点「重试」即可重新投递任务
-（重试会重新生成变体并投递归档）。
+`BLOG_CLOUDREVE_ENABLED=false` 时上传、四档变体、媒体库全部照常工作，只是不推原图与变体、
+也不产出「查看原图」链接。之后想补归档：把开关打开并重建容器，然后在媒体库对每张图点「重试」
+即可重新投递任务（重试会重新生成变体并投递归档）。
 
 ### 11.5 磁盘上的物理文件名不可预测（实测结论，别拿它做直出）
 
@@ -253,10 +279,11 @@ WebDAV 不会把它交出来：
 - `PROPFIND` 只返回虚拟路径和 4 字符 `getetag`（形如 `"XqUl"`，是 `pkg/hashid` 对文件 ID 的编码），
   与物理名里的随机段无关；实测用 ETag 拼 `{uid}_{etag}_{name}` 等 10 种组合全部 404；
 - 同名、同内容都不去重：两次上传是两份物理文件，配额各自 +size；
-- 结论：**WebDAV 无法直接或低成本拿到物理名**，也无法反推。公开图必须走确定性路径，
-  即 `/data/blog/uploads/{sha[:2]}/{sha}/{480,960,1600,2400}.webp`，Cloudreve 只当归档。
+- 结论：**WebDAV 无法直接或低成本拿到物理名**，也无法反推。所以公开站的图片仍走确定性路径
+  `/data/blog/uploads/{sha[:2]}/{sha}/{480,960,1600,2400}.webp`（nginx 直出）；
+  图床的直出只用于「查看原图」，且必须先把命名规则改成可预测的形式（见下）。
 
-如果确实要让 Cloudreve 的目录被匿名直出、且名字可预测，只能改策略模板（后台 → 存储策略 → 编辑，
+让 Cloudreve 的目录被匿名直出、且名字可预测，要改策略模板（后台 → 存储策略 → 编辑，
 字段就是 `DirNameRule` / `FileNameRule`，admin API 直接收整个 policy 对象）：
 
 | 目标 | 写法 |

@@ -215,6 +215,15 @@ export function MediaLibrary() {
                       >
                         复制链接
                       </Button>
+                      {item.origUrl ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void copyText(item.origUrl, `orig-${item.id}`)}
+                        >
+                          {copied === `orig-${item.id}` ? "已复制" : "复制原图链接"}
+                        </Button>
+                      ) : null}
                       {item.status === "failed" ? (
                         <Button
                           size="sm"

@@ -80,7 +80,7 @@ type TaskConfig struct {
 	IntervalSeconds int  `mapstructure:"interval_seconds"`
 }
 
-// CloudreveConfig 描述原图归档的 WebDAV 目标（§10：原图推 Cloudreve）。
+// CloudreveConfig 描述原图与变体归档的 WebDAV 目标（§10）。
 //
 // 口令只走环境变量 BLOG_CLOUDREVE_PASSWORD，不写入 config.yaml。
 type CloudreveConfig struct {
@@ -90,6 +90,11 @@ type CloudreveConfig struct {
 	Password       string `mapstructure:"password"`
 	BasePath       string `mapstructure:"base_path"`
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+	// PublicBaseURL 是图床的匿名直出前缀（如 https://pan.example.com/public/blog）。
+	// 为空表示不产出原图直链，正文里的图片也就不会被包上「查看原图」链接。
+	PublicBaseURL string `mapstructure:"public_base_url"`
+	// ArchiveVariants 决定四档 WebP 变体是否也推上图床（默认 true）。
+	ArchiveVariants bool `mapstructure:"archive_variants"`
 }
 
 // Timeout 返回 WebDAV 请求超时。
@@ -204,6 +209,8 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("cloudreve.username", "")
 	v.SetDefault("cloudreve.password", "")
 	v.SetDefault("cloudreve.base_path", "/blog")
+	v.SetDefault("cloudreve.public_base_url", "")
+	v.SetDefault("cloudreve.archive_variants", true)
 	v.SetDefault("cloudreve.timeout_seconds", 30)
 }
 
@@ -226,6 +233,7 @@ func (c *Config) normalize() error {
 		c.Cloudreve.BasePath = "/" + c.Cloudreve.BasePath
 	}
 	c.Cloudreve.BasePath = strings.TrimRight(c.Cloudreve.BasePath, "/")
+	c.Cloudreve.PublicBaseURL = strings.TrimRight(strings.TrimSpace(c.Cloudreve.PublicBaseURL), "/")
 
 	if c.Upload.Dir != "" {
 		if err := os.MkdirAll(c.Upload.Dir, 0o750); err != nil {
@@ -302,6 +310,10 @@ func (c Config) Validate() error {
 	}
 	if c.Cloudreve.TimeoutSeconds < 5 || c.Cloudreve.TimeoutSeconds > 300 {
 		problems = append(problems, "cloudreve.timeout_seconds 必须在 5–300 之间")
+	}
+	if base := c.Cloudreve.PublicBaseURL; base != "" &&
+		!strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		problems = append(problems, "cloudreve.public_base_url 必须以 http:// 或 https:// 开头")
 	}
 
 	if len(problems) > 0 {

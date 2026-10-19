@@ -60,7 +60,7 @@
 | Go 进程 | 双 listener 边缘路由、全部 API、静态文件校验、任务调度 | 不渲染 HTML 页面 |
 | Next 进程 | 全部页面渲染（公开 SSR + 管理 CSR + 预览页） | 不直连数据库、不写业务规则 |
 | SQLite | 唯一持久化存储 | 不存图片二进制 |
-| Cloudreve | 原图归档 + 文件分享页（WebDAV） | 不作为前台图片源 |
+| Cloudreve | 原图 + 四档变体归档（WebDAV），可选匿名直出给「查看原图」 | 不作为前台图片源 |
 
 **端口 3065 属于既有服务，任何代码、配置、文档都不得改动它。**
 **健康检查端点只注册在 8641**，8640 上不暴露磁盘、队列、DB 状态。
@@ -391,7 +391,8 @@ apps/web/
 3. `sha256` 去重：命中则直接返回已有 `media`
 4. 入库 `processing` → 投递 `media_process`
 5. worker（并发 1）：生成 480/960/1600/2400 四档 WebP（q82）+ 20px blurhash；**变体不超过原图尺寸，不放大**
-6. `ready` → 投递 `media_archive`，WebDAV 推原图到 Cloudreve `/blog/{sha256}.{ext}`
+6. `ready` → 投递 `media_archive`，WebDAV 推原图与四档变体到 Cloudreve
+   `/blog/{sha256}.{ext}` 与 `/blog/{sha256}_{480|960|1600|2400}.webp`（变体可关，见 `cloudreve.archive_variants`）
 7. 归档成功 → `orig_archived=1`，**本地原图保留 30 天**；`cleanup` 任务在 30 天后或磁盘 >85% 时删除
 
 **URL 规则（唯一允许的形态）**
@@ -404,6 +405,12 @@ apps/web/
 - 禁止查询参数做版本（`?v=` 一律不允许）
 - 禁止把 Cloudreve 分享链接写进正文
 - `media` 表永不存 URL，只存 `storage_key` + `variants_json`
+- 「查看原图」用图床的**匿名直出**，不用分享链接：配了 `cloudreve.public_base_url` 后，
+  公开详情返回的 `contentHtml` 会给本站图片包一层
+  `<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank" rel="noopener noreferrer">`。
+  链接在**读取时现算**（归档晚于发布也不会漏），图床未启用或该图未归档时 `contentHtml` 原样返回
+- 该直链成立的前提：图床存储策略的「文件名规则」必须是 `{originname}`，不能含 `{uuid}`/`{randomkey8}`
+  这类随机段，否则博客算不出真实文件名（原因与排查见 `docs/runbook.md` §11.5）
 
 **删除**：有引用返回 `409 / 2002` + 引用清单；无引用才删文件与记录。
 
@@ -451,7 +458,7 @@ apps/web/
 | --- | --- | --- |
 | `publish_scheduled` | 每分钟 | `scheduled` 且 `published_at<=now` → 发布 |
 | `media_process` | 上传后 | 生成变体 + blurhash |
-| `media_archive` | 变体就绪 | WebDAV 推原图到 Cloudreve |
+| `media_archive` | 变体就绪 | WebDAV 推原图与四档变体到 Cloudreve |
 | `link_check` | 每周一 | HEAD 检查外链与正文图片，写 `link_checks` |
 | `backup` | 每日 03:00（Asia/Shanghai） | `VACUUM INTO` + uploads 快照 |
 | `cleanup` | 每日 04:00（Asia/Shanghai） | 物理删软删 >30 天的文章、删 `page_views` >90 天、裁剪 revision 到 50、删过期 session/preview_token/login_attempts、删归档满 30 天的本地原图 |
@@ -671,6 +678,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.7 | 2026-10-19 | D8 补充：`media_archive` 同时推四档变体（`cloudreve.archive_variants`，默认开）；新增 `cloudreve.public_base_url`，公开详情 `contentHtml` 在读取时给本站图片包上「查看原图」链接（`MediaItem.origUrl` 同步暴露）；明确图床「文件名规则」必须为 `{originname}` |
 | 1.6 | 2026-10-19 | D8 实现修订：白名单补 `buckket/go-blurhash`；`media_process` / `media_archive` 接入 jobs 调度器（并发 1、退避 1m/5m/15m）；Cloudreve 归档配置（`cloudreve.*`，口令只走环境变量） |
 | 1.5 | 2026-10-18 | D7 实现修订：管理端（8641）增加 `/uploads/*` 磁盘直出，供媒体库与编辑器预览（8640 仍由 nginx 直出）；白名单补 `golang.org/x/image`（缩放），明确 `gen2brain/webp` 用 `-tags nodynamic` 的 wazero 后端构建 |
 | 1.4 | 2026-10-18 | D6 实现修订：新增错误码 1007 `ERROR_GONE`（归档与已删除文章返回 410，避免与 1002/404 混淆） |

@@ -50,7 +50,10 @@ func (PostApi) Detail(c *gin.Context) {
 		response.FailWithError(c, err)
 		return
 	}
-	response.OkWithETag(c, post.PublicDetail())
+	detail := post.PublicDetail()
+	// 本站图片在返回时包上「查看原图」链接；图床未启用或未归档时原样返回（§10）。
+	detail.ContentHTML = service.ServiceGroupApp.Media.DecorateOriginals(detail.ContentHTML)
+	response.OkWithETag(c, detail)
 }
 
 // Search 处理 GET /api/search?q=：≥3 字走 FTS5，1–2 字走 LIKE 兜底。
