@@ -43,15 +43,19 @@ func headingID(heading *ast.Heading, source []byte) string {
 	return base
 }
 
-// headingText 收集标题内所有文本节点（含强调、行内代码），不依赖已弃用的 Node.Text。
+// headingText 收集标题内所有文本节点（含强调、行内代码与公式原文），不依赖已弃用的 Node.Text。
 func headingText(node ast.Node, source []byte) string {
 	var sb strings.Builder
 	_ = ast.Walk(node, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
-		if textNode, ok := child.(*ast.Text); ok {
-			sb.Write(textNode.Segment.Value(source))
+		switch typed := child.(type) {
+		case *ast.Text:
+			sb.Write(typed.Segment.Value(source))
+		case *mathNode:
+			// 公式已经被换成占位节点，锚点仍按 TeX 原文算，保证 id 稳定。
+			sb.Write(typed.tex)
 		}
 		return ast.WalkContinue, nil
 	})

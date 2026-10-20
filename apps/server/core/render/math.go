@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/yuin/goldmark/ast"
+	extensionast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 )
@@ -39,18 +40,28 @@ var (
 	mathPattern = regexp.MustCompile(`\$\$([^$\n]+?)\$\$|\$([^$\n\s](?:[^$\n]*[^$\n\s])?)\$`)
 )
 
-// mathTransformer 在解析完成后把段落里的 $...$ 换成 mathNode。
+// mathTransformer 在解析完成后把行内容器里的 $...$ 换成 mathNode。
 type mathTransformer struct{}
 
 // Transform 实现 parser.ASTTransformer。
+//
+// 公式可以出现在任何行内容器里：段落、紧凑列表项（goldmark 用 TextBlock 而不是 Paragraph）、
+// 标题、表格单元格。少处理一种就会出现「列表里的公式不渲染」这类问题（§11）。
 func (mathTransformer) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
 	source := reader.Source()
 	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
-		if paragraph, ok := node.(*ast.Paragraph); ok {
-			replaceParagraphMath(paragraph, source)
+		switch typed := node.(type) {
+		case *ast.Paragraph:
+			replaceParagraphMath(typed, source)
+		case *ast.TextBlock:
+			replaceMathInInline(typed, source)
+		case *ast.Heading:
+			replaceMathInInline(typed, source)
+		case *extensionast.TableCell:
+			replaceMathInInline(typed, source)
 		}
 		return ast.WalkContinue, nil
 	})
@@ -72,7 +83,7 @@ func replaceParagraphMath(parent *ast.Paragraph, source []byte) {
 		parent.AppendChild(parent, &mathNode{tex: tex, block: true})
 		return
 	}
-	replaceMathInParagraph(parent, source)
+	replaceMathInInline(parent, source)
 }
 
 // wholeParagraphMath 判断段落是否整体就是 `$$…$$`；是则返回去掉定界符并修剪过的 TeX。
@@ -115,8 +126,13 @@ func wholeParagraphMath(parent *ast.Paragraph, source []byte) ([]byte, bool) {
 	return tex, true
 }
 
-// replaceMathInParagraph 只处理段落的直接 Text 子节点；代码块与代码段不参与。
-func replaceMathInParagraph(parent *ast.Paragraph, source []byte) {
+// replaceMathInInline 处理一个行内容器（段落 / 紧凑列表项 / 标题 / 表格单元格）。
+//
+// 匹配前必须先把相邻的 Text 兄弟合回去：goldmark 在强调定界符处会把一段文本切开
+// （`$a_i, b_i$` 会被切成 `$a_` / `i, b_` / `i$` 三个节点），公式横跨多个节点时
+// 单节点正则永远匹配不到，表现就是「带下标的公式不渲染」（§11）。
+func replaceMathInInline(parent ast.Node, source []byte) {
+	mergeAdjacentText(parent, source)
 	for child := parent.FirstChild(); child != nil; {
 		next := child.NextSibling()
 		if textNode, ok := child.(*ast.Text); ok {
@@ -126,8 +142,31 @@ func replaceMathInParagraph(parent *ast.Paragraph, source []byte) {
 	}
 }
 
+// mergeAdjacentText 合并相邻且源码连续的 Text 兄弟节点。
+//
+// 只合并紧挨着的 Text：中间夹了强调、行内代码、链接等节点时不动它们，
+// 所以 `$x$ **粗** $y$` 这种混排不会把标记吃掉。换行（软换行）会让两个节点不再连续，
+// 也就不会被合并。
+func mergeAdjacentText(parent ast.Node, source []byte) {
+	for child := parent.FirstChild(); child != nil; {
+		textNode, ok := child.(*ast.Text)
+		if !ok {
+			child = child.NextSibling()
+			continue
+		}
+		for {
+			next, isText := textNode.NextSibling().(*ast.Text)
+			if !isText || !textNode.Merge(next, source) {
+				break
+			}
+			parent.RemoveChild(parent, next)
+		}
+		child = textNode.NextSibling()
+	}
+}
+
 // replaceTextWithMath 把一段文本按公式切分，并保留原节点的换行语义。
-func replaceTextWithMath(parent *ast.Paragraph, node *ast.Text, source []byte) {
+func replaceTextWithMath(parent ast.Node, node *ast.Text, source []byte) {
 	value := node.Segment.Value(source)
 	matches := mathPattern.FindAllSubmatchIndex(value, -1)
 	if len(matches) == 0 {
@@ -139,7 +178,7 @@ func replaceTextWithMath(parent *ast.Paragraph, node *ast.Text, source []byte) {
 	cursor := 0
 	for _, match := range matches {
 		if match[0] > cursor {
-			nodes = append(nodes, ast.NewTextSegment(text.NewSegment(base+cursor, base+match[0])))
+			nodes = append(nodes, newTextSegment(base+cursor, base+match[0], node.IsRaw()))
 		}
 
 		block := match[2] >= 0
@@ -151,7 +190,7 @@ func replaceTextWithMath(parent *ast.Paragraph, node *ast.Text, source []byte) {
 		cursor = match[1]
 	}
 	if cursor < len(value) {
-		nodes = append(nodes, ast.NewTextSegment(text.NewSegment(base+cursor, base+len(value))))
+		nodes = append(nodes, newTextSegment(base+cursor, base+len(value), node.IsRaw()))
 	}
 
 	// 原节点末尾的软/硬换行必须留在最后一个节点上，否则段落会被粘成一行。
@@ -160,7 +199,7 @@ func replaceTextWithMath(parent *ast.Paragraph, node *ast.Text, source []byte) {
 			last.SetSoftLineBreak(node.SoftLineBreak())
 			last.SetHardLineBreak(node.HardLineBreak())
 		} else {
-			tail := ast.NewTextSegment(text.NewSegment(base+len(value), base+len(value)))
+			tail := newTextSegment(base+len(value), base+len(value), node.IsRaw())
 			tail.SetSoftLineBreak(node.SoftLineBreak())
 			tail.SetHardLineBreak(node.HardLineBreak())
 			nodes = append(nodes, tail)
@@ -173,4 +212,11 @@ func replaceTextWithMath(parent *ast.Paragraph, node *ast.Text, source []byte) {
 		parent.InsertAfter(parent, previous, replacement)
 		previous = replacement
 	}
+}
+
+// newTextSegment 建一个文本节点，并沿用原节点的 raw 标记（如 `\&` 这类转义）。
+func newTextSegment(start, stop int, raw bool) *ast.Text {
+	segment := ast.NewTextSegment(text.NewSegment(start, stop))
+	segment.SetRaw(raw)
+	return segment
 }

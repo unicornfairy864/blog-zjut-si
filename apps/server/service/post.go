@@ -35,6 +35,12 @@ const (
 	postSlugAutoLen = 40
 	// postTitleMaxLen 是标题的最大字符数。
 	postTitleMaxLen = 200
+	// postSEOTitleMaxLen / postSEODescriptionMaxLen / postCanonicalURLMaxLen / postLangMaxLen
+	// 与 §5 的 binding 上限一致，service 侧再兜一次（binding 只作用于 api 层）。
+	postSEOTitleMaxLen       = 200
+	postSEODescriptionMaxLen = 500
+	postCanonicalURLMaxLen   = 500
+	postLangMaxLen           = 20
 	// postSlugCollisionRetries 是自动 slug 撞车后的编号重试上限。
 	postSlugCollisionRetries = 50
 )
@@ -121,6 +127,9 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 	lang := strings.TrimSpace(in.Lang)
 	if lang == "" {
 		lang = model.DefaultPostLang
+	}
+	if err := validateCanonicalURL(strings.TrimSpace(in.CanonicalURL)); err != nil {
+		return nil, err
 	}
 
 	post := &model.Post{
@@ -257,6 +266,78 @@ func (s PostService) Update(id int64, in PostUpdateInput, actor PostActor) (*mod
 	}
 	if slugChanged {
 		changed = append(changed, "slug")
+	}
+
+	// 以下字段此前被漏掉：接口层收下了却没人写库，表现是"改了没反应"。
+	// 0 表示显式清空（置 NULL），与 PostUpdateInput 的约定一致。
+	if in.CoverMediaID != nil {
+		post.CoverMediaID = clearableID(*in.CoverMediaID)
+		fields["cover_media_id"] = post.CoverMediaID
+		changed = append(changed, "coverMediaId")
+	}
+	if in.OGMediaID != nil {
+		post.OGMediaID = clearableID(*in.OGMediaID)
+		fields["og_media_id"] = post.OGMediaID
+		changed = append(changed, "ogMediaId")
+	}
+	if in.SeriesID != nil {
+		post.SeriesID = clearableID(*in.SeriesID)
+		fields["series_id"] = post.SeriesID
+		changed = append(changed, "seriesId")
+	}
+	if in.SeriesOrder != nil {
+		post.SeriesOrder = *in.SeriesOrder
+		fields["series_order"] = post.SeriesOrder
+		changed = append(changed, "seriesOrder")
+	}
+	if in.IsPinned != nil {
+		post.IsPinned = *in.IsPinned
+		fields["is_pinned"] = post.IsPinned
+		changed = append(changed, "isPinned")
+	}
+	if in.AllowComments != nil {
+		post.AllowComments = *in.AllowComments
+		fields["allow_comments"] = post.AllowComments
+		changed = append(changed, "allowComments")
+	}
+	if in.SEOTitle != nil {
+		value := strings.TrimSpace(*in.SEOTitle)
+		if utf8.RuneCountInString(value) > postSEOTitleMaxLen {
+			return nil, errs.New(errs.ErrorValidation, "seoTitle 不能超过 200 个字符")
+		}
+		post.SEOTitle = value
+		fields["seo_title"] = value
+		changed = append(changed, "seoTitle")
+	}
+	if in.SEODescription != nil {
+		value := strings.TrimSpace(*in.SEODescription)
+		if utf8.RuneCountInString(value) > postSEODescriptionMaxLen {
+			return nil, errs.New(errs.ErrorValidation, "seoDescription 不能超过 500 个字符")
+		}
+		post.SEODescription = value
+		fields["seo_description"] = value
+		changed = append(changed, "seoDescription")
+	}
+	if in.CanonicalURL != nil {
+		value := strings.TrimSpace(*in.CanonicalURL)
+		if err := validateCanonicalURL(value); err != nil {
+			return nil, err
+		}
+		post.CanonicalURL = value
+		fields["canonical_url"] = value
+		changed = append(changed, "canonicalUrl")
+	}
+	if in.Lang != nil {
+		value := strings.TrimSpace(*in.Lang)
+		if value == "" {
+			value = model.DefaultPostLang
+		}
+		if utf8.RuneCountInString(value) > postLangMaxLen {
+			return nil, errs.New(errs.ErrorValidation, "lang 不能超过 20 个字符")
+		}
+		post.Lang = value
+		fields["lang"] = value
+		changed = append(changed, "lang")
 	}
 
 	statusChanged := false
@@ -615,6 +696,28 @@ func applyPostStatus(post *model.Post, status string, fields map[string]any) err
 		return errs.New(errs.ErrorValidation, "发布与定时发布请使用专用接口")
 	default:
 		return errs.New(errs.ErrorValidation, "文章状态取值非法")
+	}
+	return nil
+}
+
+// clearableID 把 0 翻成 nil（显式清空外键），其余原样返回。
+func clearableID(id int64) *int64 {
+	if id <= 0 {
+		return nil
+	}
+	return &id
+}
+
+// validateCanonicalURL 校验 canonicalUrl：留空表示用默认（本站链接），填了必须是 http(s)。
+//
+// 空串是合法的"留空"值：前端每次保存都会带上该字段，空值不该被当成非法链接（§5）。
+func validateCanonicalURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	if !isHTTPURL(value) || utf8.RuneCountInString(value) > postCanonicalURLMaxLen {
+		return errs.New(errs.ErrorValidation,
+			"canonicalUrl 必须以 http:// 或 https:// 开头，且不超过 500 个字符")
 	}
 	return nil
 }

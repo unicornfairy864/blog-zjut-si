@@ -21,6 +21,8 @@ import (
 type PostApi struct{}
 
 // postCreateRequest 是新建文章入参；新建一律落草稿，发布走 /publish。
+//
+// canonicalUrl 的格式校验在 service（空串与纯空白都表示"留空"，见 validateCanonicalURL）。
 type postCreateRequest struct {
 	Slug           string `json:"slug" binding:"omitempty,max=120"`
 	Title          string `json:"title" binding:"required,min=1,max=200"`
@@ -34,11 +36,15 @@ type postCreateRequest struct {
 	SeriesOrder    int    `json:"seriesOrder" binding:"gte=0"`
 	SEOTitle       string `json:"seoTitle" binding:"max=200"`
 	SEODescription string `json:"seoDescription" binding:"max=500"`
-	CanonicalURL   string `json:"canonicalUrl" binding:"omitempty,url,max=500"`
+	CanonicalURL   string `json:"canonicalUrl" binding:"omitempty,max=500"`
 	Lang           string `json:"lang" binding:"omitempty,max=20"`
 }
 
 // postUpdateRequest 是更新入参；nil 字段表示不修改。
+//
+// canonicalUrl 不在这里做 url 校验：指针字段上 `omitempty` 只在 nil 时跳过，
+// 前端每次都会带 `"canonicalUrl": ""` 表示"不改/留空"，带 url 标签会把空串判成
+// 非法链接（1003 链接格式不正确）。格式校验放在 service 里，空串视为留空。
 type postUpdateRequest struct {
 	Slug           *string `json:"slug" binding:"omitempty,max=120"`
 	Title          *string `json:"title" binding:"omitempty,min=1,max=200"`
@@ -52,7 +58,7 @@ type postUpdateRequest struct {
 	SeriesOrder    *int    `json:"seriesOrder" binding:"omitempty,gte=0"`
 	SEOTitle       *string `json:"seoTitle" binding:"omitempty,max=200"`
 	SEODescription *string `json:"seoDescription" binding:"omitempty,max=500"`
-	CanonicalURL   *string `json:"canonicalUrl" binding:"omitempty,url,max=500"`
+	CanonicalURL   *string `json:"canonicalUrl" binding:"omitempty,max=500"`
 	Lang           *string `json:"lang" binding:"omitempty,max=20"`
 	Status         *string `json:"status"`
 	CreateRedirect bool    `json:"createRedirect"`
