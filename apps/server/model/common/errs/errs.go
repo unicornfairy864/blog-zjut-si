@@ -28,6 +28,9 @@ const (
 )
 
 // httpStatusByCode 是 §5 的错误码 → HTTP 状态映射。
+//
+// v1.14 起业务错误不再用它决定状态码（业务错误恒为 HTTP 200，前端只看 code）；
+// 保留此表是因为健康检查、文档与少量非业务场景仍需要真实状态码。
 var httpStatusByCode = map[int]int{
 	Success:             200,
 	Error:               500,
@@ -50,6 +53,9 @@ var httpStatusByCode = map[int]int{
 }
 
 // HTTPStatus 返回 code 对应的 HTTP 状态码；未知 code 归 500。
+//
+// v1.14 起业务错误不再用它决定状态码：业务失败一律 HTTP 200 + code。
+// 保留给健康检查（/readyz 503）、文档与需要真实状态码的非业务场景。
 func HTTPStatus(code int) int {
 	if status, ok := httpStatusByCode[code]; ok {
 		return status
@@ -57,7 +63,10 @@ func HTTPStatus(code int) int {
 	return 500
 }
 
-// AppError 是可以直接映射为 HTTP 响应的业务错误。
+// AppError 是可以直接映射为业务错误信封的错误。
+//
+// v1.14 起 HTTPStatus 不再决定响应状态码（业务错误恒为 HTTP 200），
+// 该字段仅作参考，保留以免调用方破坏。
 type AppError struct {
 	Code       int
 	HTTPStatus int
@@ -68,7 +77,7 @@ type AppError struct {
 // Error 实现 error，仅用于日志与包装。
 func (e *AppError) Error() string { return e.Message }
 
-// New 构造业务错误，HTTP 状态由 code 查表得出。
+// New 构造业务错误；v1.14 起 HTTP 状态恒为 200，HTTPStatus 仅作参考保留。
 func New(code int, message string) *AppError {
 	return &AppError{Code: code, HTTPStatus: HTTPStatus(code), Message: message}
 }

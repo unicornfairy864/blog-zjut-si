@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 
-import { isApiError, publicApi, type PageDetail } from "@/lib/api/public";
+import { isApiCode, publicApi, type PageDetail } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
 import { formatDate } from "@/lib/utils";
 import { PostContent } from "@/ui/post/post-content";
@@ -23,7 +23,7 @@ const loadPage = cache(async (slug: string): Promise<PageDetail> => {
   try {
     return await publicApi.page(slug);
   } catch (error) {
-    if (isApiError(error, 404) || isApiError(error, 410)) {
+    if (isApiCode(error, 1002) || isApiCode(error, 1007)) {
       notFound();
     }
     throw error;

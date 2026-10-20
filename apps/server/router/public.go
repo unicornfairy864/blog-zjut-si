@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/api/v1"
@@ -65,7 +67,8 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 	engine.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if edge.IsPrivatePath(path) || edge.IsAPIPath(path) {
-			response.FailWithDetailed(c, errs.ErrorNotFound, nil, "页面不存在")
+			// 路由不存在不是业务错误：保留真实 404（§5 例外清单）。
+			response.FailWithHTTPStatus(c, http.StatusNotFound, errs.ErrorNotFound, nil, "页面不存在")
 			return
 		}
 		// 改过 slug 的老链接：命中 redirects 就在边缘跳走，不落到 Next 的 404（§5）。

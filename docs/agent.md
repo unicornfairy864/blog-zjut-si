@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.13**（2026-10-20 图床下线：图片与附件全部本地自托管，见 §22）
+> 版本：**v1.14**（2026-10-20 业务错误统一 HTTP 200：成功/失败只看信封 `code`，见 §5 与 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -197,7 +197,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | --- | --- |
 | 前缀 | `/api`（不引入 `/api/v1` 前缀，URL 保持简洁） |
 | 成功 | HTTP 200 + `{"code":0,"data":<数据>,"msg":"操作成功"}` |
-| 失败 | 对应 HTTP 状态 + `{"code":<数字码>,"data":<details\|null>,"msg":"<人话>"}` |
+| 失败 | **HTTP 200** + `{"code":<数字码>,"data":<details\|null>,"msg":"<人话>"}`；成功/失败只由 `code` 区分（v1.14 起，gin-vue-admin 风格）。`data` 语义不变：无附加数据为 `null`，字段错误为 `[{field,message}]` |
 | 分页入参 | `page`(≥1) `pageSize`(1–50, 默认 20) `keyword`(可选) |
 | 分页出参 | `data:{"list":[],"total":0,"page":1,"pageSize":20}` |
 | 时间 | 全部出参为 Unix 秒整数 |
@@ -206,28 +206,42 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 访客标识 | 公开写接口（点赞、PV 打点）读请求头 `X-Visitor-Id`：前端在 `localStorage` 生成一次的随机串，8–64 位 `[A-Za-z0-9_-]`；缺失或非法时服务端按 `ip\|ua` 兜底。**公开 HTML 与公开读接口一律不 `Set-Cookie`**（§17.1） |
 | 访客态读 | `liked` 这类依赖访客的读接口（`GET /posts/{slug}/stats`）用 `Cache-Control: no-store`，不参与 ETag；计数不进 SSR HTML（§17.1） |
 
+**保留真实 HTTP 状态码的例外清单**（这些都不是业务错误，不受"业务错误恒为 200"约束）：
+
+| # | 场景 | 真实状态码 |
+| --- | --- | --- |
+| 1 | `GET /healthz`、`GET /readyz`（容器健康检查依赖） | 200 / 503 |
+| 2 | 静态直出与文件下载：8641 的 `/uploads/*`（`edge.ServeUploads`）、公开 `GET /api/attachments/{id}/go` 命中本地文件时的文件流（`http.ServeFile`，含 200/206） | 200 / 206 / 404 |
+| 3 | 跳转：公开边缘按 `redirects.from_path` 的 301/302、外链附件的 `c.Redirect(302)` | 301 / 302 |
+| 4 | 公开读接口的 ETag 协商命中 `If-None-Match`（`response.OkWithETag`） | 304 |
+| 5 | **路由不存在**（三个 engine 的 `NoRoute`）：`404 + code 1002`，G1 验收断言依赖它（`curl 127.0.0.1:8640/api/admin/posts` 必须 404） | 404 |
+
 **错误码（数字码 + 常量名，禁止裸数字）**
 
-| code | 常量 | HTTP | 语义 |
-| --- | --- | --- | --- |
-| 0 | `SUCCESS` | 200 | 成功 |
-| 7 | `ERROR` | 500 | 未分类失败 |
-| 1000 | `ERROR_AUTH` | 401 | 未登录 / 会话失效 |
-| 1001 | `ERROR_FORBIDDEN` | 403 | 越权 / CSRF 失败 |
-| 1002 | `ERROR_NOT_FOUND` | 404 | 资源不存在 |
-| 1003 | `ERROR_VALIDATION` | 400 | 参数校验失败，`data` 带字段错误数组 |
-| 1004 | `ERROR_CONFLICT` | 409 | 通用冲突 |
-| 1005 | `ERROR_RATE_LIMITED` | 429 | 限流 |
-| 1006 | `ERROR_INTERNAL` | 500 | 内部错误（不暴露堆栈） |
-| 1007 | `ERROR_GONE` | 410 | 已归档或已删除，资源不再提供 |
-| 2001 | `ERROR_SLUG_CONFLICT` | 409 | slug 重复 |
-| 2002 | `ERROR_MEDIA_IN_USE` | 409 | 媒体被引用，`data` 带引用清单 |
-| 2003 | `ERROR_IMAGE_TOO_LARGE` | 413 | 像素或字节超限 |
-| 2004 | `ERROR_SLUG_IMMUTABLE` | 409 | 已发布文章改 slug 未写 redirect |
-| 2005 | `ERROR_LOGIN_LOCKED` | 423 | 登录锁定 30 分钟 |
-| 2006 | `ERROR_PREVIEW_EXPIRED` | 410 | 预览链接过期或已用 |
-| 2007 | `ERROR_FILE_REJECTED` | 415 | 附件扩展名/文件名命中安全黑名单 |
-| 2008 | `ERROR_FILE_TOO_LARGE` | 413 | 附件字节数超过 `file.max_bytes` |
+| code | 常量 | 语义 |
+| --- | --- | --- |
+| 0 | `SUCCESS` | 成功 |
+| 7 | `ERROR` | 未分类失败 |
+| 1000 | `ERROR_AUTH` | 未登录 / 会话失效 |
+| 1001 | `ERROR_FORBIDDEN` | 越权 / CSRF 失败 |
+| 1002 | `ERROR_NOT_FOUND` | 资源不存在 |
+| 1003 | `ERROR_VALIDATION` | 参数校验失败，`data` 带字段错误数组 |
+| 1004 | `ERROR_CONFLICT` | 通用冲突 |
+| 1005 | `ERROR_RATE_LIMITED` | 限流 |
+| 1006 | `ERROR_INTERNAL` | 内部错误（不暴露堆栈） |
+| 1007 | `ERROR_GONE` | 已归档或已删除，资源不再提供 |
+| 2001 | `ERROR_SLUG_CONFLICT` | slug 重复 |
+| 2002 | `ERROR_MEDIA_IN_USE` | 媒体被引用，`data` 带引用清单 |
+| 2003 | `ERROR_IMAGE_TOO_LARGE` | 像素或字节超限 |
+| 2004 | `ERROR_SLUG_IMMUTABLE` | 已发布文章改 slug 未写 redirect |
+| 2005 | `ERROR_LOGIN_LOCKED` | 登录锁定 30 分钟 |
+| 2006 | `ERROR_PREVIEW_EXPIRED` | 预览链接过期或已用 |
+| 2007 | `ERROR_FILE_REJECTED` | 附件扩展名/文件名命中安全黑名单 |
+| 2008 | `ERROR_FILE_TOO_LARGE` | 附件字节数超过 `file.max_bytes` |
+
+> v1.14 起上表所有 code 的失败响应都是 **HTTP 200**，不再有"code → HTTP 状态"的映射。
+> `errs.HTTPStatus` 与 `AppError.HTTPStatus` 仍然保留，只服务于健康检查、文档与
+> `NoRoute` 这类需要真实状态码的非业务场景，**不得**再用来决定业务失败的状态码。
 
 **公开组（8640）**
 
@@ -246,7 +260,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 项 | 规则 |
 | --- | --- |
 | 点赞 | `likes` 主键 `(post_id, visitor_hash)`；`POST /posts/{slug}/like` 幂等（已赞不重复计数），`DELETE` 幂等取消；`posts.like_count` 每次变更后按 `SELECT COUNT(*) FROM likes WHERE post_id=?` 重算 |
-| 点赞限流 | **10 次 / 分钟 / visitor**，键为 `visitor_hash`（`utils.HashVisitor`），超限 `429 / 1005` |
+| 点赞限流 | **10 次 / 分钟 / visitor**，键为 `visitor_hash`（`utils.HashVisitor`），超限 `code 1005` |
 | PV 明细 | 每次 `POST /events/view` 写一行 `page_views`（`post_id` 可为 NULL、`path`、`visitor_hash`、`referrer_host`），明细保留 90 天由 `cleanup` 裁剪 |
 | PV 去重 | **同 visitor 同文章 10 分钟内只 +1**（去重键：文章页用 `post_id`，非文章页用 `path`）；重复打点返回 `recorded:false`，不写计数 |
 | 计数落点 | 计入时 `posts.view_count+1`，并同时 upsert `stats_daily` 的**文章行**与 `post_id=0` **全站行** |
@@ -263,7 +277,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 到点生效 | 任务执行时再判一次：`status=scheduled` 且 `published_at <= now` 才发布，否则跳过（用户可能已取消定时）；发布逻辑与手动 `publish` 完全同源（写 revision、重算渲染、revision+1） |
 | 取消定时 | `POST /posts/{id}/unpublish` 与 PATCH 回 `draft` 都撤掉待执行的 `publish_scheduled` 任务 |
 | 版本回滚 | `POST /posts/{id}/revisions/{rid}/restore`：用旧版本内容覆盖正文，并**再写一条新 revision**（`revision+1`，note 记来源），历史不被改写 |
-| 预览链接 | `POST /posts/{id}/preview-link` 生成一次性 token（明文只回一次，库里只存 `token_hash`，24h 过期）；`GET /preview/{token}`（`no-store`）首次访问写 `used_at` 并返回内容，之后或过期 → `410 / 2006`；不存在 → `404 / 1002` |
+| 预览链接 | `POST /posts/{id}/preview-link` 生成一次性 token（明文只回一次，库里只存 `token_hash`，24h 过期）；`GET /preview/{token}`（`no-store`）首次访问写 `used_at` 并返回内容，之后或过期 → `code 2006`；不存在 → `code 1002` |
 | 预览内容 | 预览页能看草稿 / 定时 / 归档文章；`robots.txt` 禁 `/preview`，且预览不参与 sitemap 与 RSS |
 | 任务投递 | `GET /jobs` 列表、`POST /jobs/{id}/retry` 重试失败任务、`POST /jobs` 手动投递（只允许 `cleanup` / `backup` / `link_check`，用于运维与自测） |
 | 周期任务 | 调度器每 tick 检查一次"当天该跑还没跑"的周期任务（按站点时区）：`backup` 03:00、`cleanup` 04:00；`link_check` 每周一 05:00。判据是 `jobs` 里当天是否已有同类型记录，重启不会重复跑 |
@@ -272,15 +286,15 @@ storage_driver  : local                             # 只有本地磁盘，不�
 
 | 项 | 规则 |
 | --- | --- |
-| 分类 CRUD | `GET|POST /{tags\|series}`、`PUT|DELETE /{tags\|series}/{id}`；`name` 必填且唯一，`slug` 可留空（ASCII 名自动生成，中文名必须手填，非法/冲突 → `400/1003`、`409/2001`）；列表带 `count`（该分类下**未删除**文章数，含草稿） |
+| 分类 CRUD | `GET|POST /{tags\|series}`、`PUT|DELETE /{tags\|series}/{id}`；`name` 必填且唯一，`slug` 可留空（ASCII 名自动生成，中文名必须手填，非法/冲突 → `code 1003`、`code 2001`）；列表带 `count`（该分类下**未删除**文章数，含草稿） |
 | 删除分类 | 连带清掉 `post_tags` / 把 `posts.series_id` 置 NULL，不删文章 |
 | 友链 CRUD | `GET|POST /links`、`PUT|DELETE /links/{id}`；`status` 只有 `active`/`hidden`，公开端只出 `active` |
 | 跳转 CRUD | `GET|POST /redirects`、`PUT|DELETE /redirects/{id}`；`status` 只有 301/302，`fromPath` 唯一且必须以 `/` 开头（≤200），`toPath` 必须以 `/` 开头或 `http(s)://` 开头（≤500）；**公开边缘按 `from_path` 精确匹配直接 301/302 并 `hits+1`**（在转 Next 之前处理） |
-| 附件 | `GET|POST /attachments`、`POST /attachments/upload`、`PUT|DELETE /attachments/{id}`；JSON 创建只用于**外链**（`shareUrl` 必填且是 http(s)，留空 → `400/1003`），本地文件走 `POST /attachments/upload`（multipart：`file`、`postId`、可选 `title`/`version`/`sort`，`title` 默认取去掉扩展名的文件名） |
-| 附件安全 | 用**黑名单**拦扩展名与固定文件名（服务端脚本、可执行文件、浏览器会当页面渲染的 `html/svg/xml` 等，见 §10），命中 → `415/2007`；超过 `file.max_bytes` → `413/2008`；隐藏文件（`.` 开头）一律拒绝 |
-| 附件下载 | 公开 `GET /attachments/{id}/go`：本地的直接下发（`application/octet-stream` + `Content-Disposition: attachment` + `nosniff`，支持 Range），外链的 `302` 到 `share_url`；两种情况都 `clicks+1`、`no-store`；记录不存在 → `404/1002`，文件丢了 → `410/1007` |
+| 附件 | `GET|POST /attachments`、`POST /attachments/upload`、`PUT|DELETE /attachments/{id}`；JSON 创建只用于**外链**（`shareUrl` 必填且是 http(s)，留空 → `code 1003`），本地文件走 `POST /attachments/upload`（multipart：`file`、`postId`、可选 `title`/`version`/`sort`，`title` 默认取去掉扩展名的文件名） |
+| 附件安全 | 用**黑名单**拦扩展名与固定文件名（服务端脚本、可执行文件、浏览器会当页面渲染的 `html/svg/xml` 等，见 §10），命中 → `code 2007`；超过 `file.max_bytes` → `code 2008`；隐藏文件（`.` 开头）一律拒绝 |
+| 附件下载 | 公开 `GET /attachments/{id}/go`：本地的直接下发（`application/octet-stream` + `Content-Disposition: attachment` + `nosniff`，支持 Range），外链的 `302` 到 `share_url`；两种情况都 `clicks+1`、`no-store`；记录不存在 → `code 1002`，文件丢了 → `code 1007` |
 | 存储管理 | `GET /storage`：占用统计（原图/变体/附件/合计）+ 孤儿文件（磁盘有、库里无）+ 缺失文件（库里有、磁盘无）+ 已删原图数，清单各截断到 200/100 条但计数是全量；`POST /storage/cleanup` 只删孤儿，返回 `{removedFiles,removedBytes,failedFiles}` |
-| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `400/1003`）；只读回显 `contentVersion`、`upload{dir,maxBytes}`、`file{dir,maxBytes}`、`task{enabled,intervalSeconds}`、`db{path}`（**不含任何口令**）。写成功必须 `content_version+1`（公开读的 ETag 依赖它） |
+| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `code 1003`）；只读回显 `contentVersion`、`upload{dir,maxBytes}`、`file{dir,maxBytes}`、`task{enabled,intervalSeconds}`、`db{path}`（**不含任何口令**）。写成功必须 `content_version+1`（公开读的 ETag 依赖它） |
 | 任务页 | `GET /jobs` 分页 + `POST /jobs` 手动投递 + `POST /jobs/{id}/retry`；`payload` 原样回显 JSON 字符串 |
 | 审计页 | `GET /audit-logs` 分页，支持 `action` / `targetType` / `targetId` 过滤；`meta` 以对象回显（库里是 JSON 字符串） |
 
@@ -300,23 +314,23 @@ draft ──publish──▶ published ──archive──▶ archived
 ```
 
 - `scheduled` 必须满足 `published_at > now`
-- 已发布文章 `slug` 不可变；确需修改时必须同时写 `redirects`，否则 `2004`
+- 已发布文章 `slug` 不可变；确需修改时必须同时写 `redirects`，否则 `code 2004`
 - 每次 publish：`revision+1`、写 `post_revisions`、重算 `content_html/content_text/word_count/reading_time`
-- 已发布文章再次 publish：**内容与最新版本一致时按「重复发布」返回 `409 / 1004`**；
+- 已发布文章再次 publish：**内容与最新版本一致时按「重复发布」返回 `code 1004`**；
   内容有变化（改过标题或正文）才允许，并**为改动记一个新版本**（`revision+1`，保留原 `published_at`）——
   否则线上改字永远进不了版本历史，回滚也就无从谈起。自动保存（PATCH）仍然**不产生** revision
-- `archived` 与已删除文章对外返回 **410**，不出现在列表、搜索、sitemap、RSS
+- `archived` 与已删除文章对外返回 `code 1007`，不出现在列表、搜索、sitemap、RSS
 
 **媒体**
 
 ```
 uploading(内存态) ─落盘校验─▶ processing ─成功─▶ ready
                                 └─失败(重试2次)─▶ failed ─retry─▶ processing
-ready: refs==0 → 物理删除；refs>0 → 409 (2002)
+ready: refs==0 → 物理删除；refs>0 → code 2002
 ```
 
 - worker 全局并发 **固定为 1**
-- `pixels > 50_000_000` → `failed / 2003`
+- `pixels > 50_000_000` → `failed / code 2003`
 - 引用检查三处：`cover_media_id`、`og_media_id`、`content_md` 含 `storage_key`
 
 **评论**
@@ -329,7 +343,7 @@ ready: refs==0 → 物理删除；refs>0 → 409 (2002)
 
 - 嵌套**固定两层**：顶层评论 + 它的一层回复；回复的回复挂到同一个顶层下（按 `root_id` 聚合），不再加深
 - 新评论一律 `pending`，公开列表只出 `approved`
-- 限流 **3 次 / 10 分钟 / IP**（进程内令牌桶，超限 `429 / 1005`）
+- 限流 **3 次 / 10 分钟 / IP**（进程内令牌桶，超限 `code 1005`）
 - `posts.comment_count` 只统计 `approved`，状态变更时重算
 - 邮箱只入库（含 `email_hash`），任何公开接口都不返回；`ip_hash` 同理
 
@@ -357,10 +371,10 @@ pending ─lock─▶ running ─ok─▶ done
 | 连接池 | `MaxOpenConns=4` `MaxIdleConns=4`；写事务用 immediate |
 | 内存 | `GOMEMLIMIT=400MiB`，`GOGC=60`，禁止无界 goroutine 与无上限 buffer |
 | 路由 | gin；`TrustedProxies=["127.0.0.1","172.16.0.0/12"]`（容器看到的来源是 docker 网关，不是回环） |
-| 响应 | 只用 `model/common/response`：`OkWithData` / `FailWithDetailed`；HTTP 状态码由 `code` 查表得出（见 §5） |
+| 响应 | 只用 `model/common/response`：`OkWithData` / `FailWithDetailed`；业务失败一律 HTTP 200，状态语义由 `code` 表达（见 §5）；`NoRoute` 用 `FailWithHTTPStatus` 保留真实 404 |
 | 中间件顺序 | request_id → panic 恢复 → 访问日志 → 限流 → 鉴权 → CSRF → handler |
 | 日志 | `slog` JSON 到 stdout，字段 `ts,level,request_id,method,path,status,dur_ms,ip_hash`；禁止打印密码、邮箱、cookie |
-| 错误处理 | 业务错误用 `errs.AppError{Code,HTTPStatus,Message}`；禁止把 `err.Error()` 直接返回前端 |
+| 错误处理 | 业务错误用 `errs.AppError{Code,HTTPStatus,Message}`；失败响应一律 HTTP 200，前端只看 `code`（`HTTPStatus` 已不决定状态码）；禁止把 `err.Error()` 直接返回前端 |
 | 上传 | `MaxMemory=1MB` 流式落盘；先 `DecodeConfig` 再 `Decode` |
 | 时间 | 仅用 `time.Time` 在内存中，落库前转 Unix 秒（统一 `dbtime.Unix` 类型） |
 | 并发 | 共享可变状态必须加锁；任务 worker 单实例；用 `errgroup`，禁止裸 `go func()` |
@@ -422,8 +436,8 @@ apps/web/
 | 数学 | **客户端 KaTeX**：渲染管线输出 `<span class="math" data-tex="...">`，`<MathRender>` 懒加载替换；无公式页面不加载 |
 | 命名 | 文件 kebab-case、组件 PascalCase、类型 `XxxProps`；不用 `React.FC` |
 | 导出 | 只有 Next 约定文件用 default export，其余具名导出 |
-| 错误 | `lib/api/fetcher.ts` 统一抛 `ApiError{code,message,status}`；`error.tsx` 兜底，不暴露堆栈 |
-| 登录态 | `app/(admin)/admin/(protected)/layout.tsx` 先 `GET /auth/me`，401 直接跳 `/admin/login`，避免闪烁 |
+| 错误 | `lib/api/fetcher.ts` 统一抛 `ApiError{code,message,status}`；**按 `code` 分支**（业务失败也是 HTTP 200，`status` 只作诊断）；`error.tsx` 兜底，不暴露堆栈 |
+| 登录态 | `app/(admin)/admin/(protected)/layout.tsx` 先 `GET /auth/me`，`code 1000` 直接跳 `/admin/login`，避免闪烁 |
 | 可访问性 | 语义标签、焦点可见、图片 alt 必填、对比度 AA、`eslint-plugin-jsx-a11y` |
 | 质量门 | `pnpm lint && pnpm typecheck && pnpm test && pnpm build` 全绿才允许提交 |
 | 禁止 | Server Actions（会绕过 `lib/api`）、组件内拼 API 路径、`app/api` 透传业务数据、AntD/MUI/Redux |
@@ -451,7 +465,7 @@ apps/web/
 | 上传 | 魔数校验 + 扩展名白名单（jpeg/png/webp/gif）+ 像素上限 + 大小上限 30MB；HEIC/AVIF 明确拒绝并提示前端转码；文件名不落地 |
 | EXIF | 入库前按 Orientation 摆正并剥离全部 EXIF（含 GPS），再生成变体 |
 | SQL | 全参数化；FTS5 查询字符串必须转义 |
-| 越权 | 8640 层直接 404 掉 `/admin`、`/api/admin`，不依赖登录态判断 |
+| 越权 | 8640 层直接 404 掉 `/admin`、`/api/admin`，不依赖登录态判断（`NoRoute` 例外，仍是真实 404 + `code 1002`） |
 | 限流 | 登录 5/min（按用户名）；评论 3/10min/IP；公开 API 20 r/s；点赞 10/min/visitor |
 | 响应头 | `X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy` 最小化 |
 | CSP | `script-src 'self' 'nonce-{n}' 'strict-dynamic'`，nonce 由 `middleware.ts` 注入。**禁止 `unsafe-inline`**，否则 Next RSC 水合会失败；`style-src 'self' 'unsafe-inline'` 可保留（Tailwind 运行时无内联样式，但 shadcn 组件有） |
@@ -501,7 +515,7 @@ apps/web/
 - 正文图片的 `srcset`（四档变体）/`sizes`/`width`/`height`/`loading` 也在**读取时**由同一处补上：
   存库的 `content_html` 保持编辑器产出的原始形态，响应里才是响应式版本（§16 G4「srcset 生效」）
 
-**附件安全（黑名单，`415/2007`）**
+**附件安全（黑名单，`code 2007`）**
 
 文件既不会被执行、也不会被直出，所以只挡三类：能在服务器上跑的脚本（`php*`/`phtml`/`phar`/`jsp*`/`asp*`/`cgi`/`pl`/`py`/`rb`/`lua`/`sh`/`bat`/`ps1`/`jar`/`class`…）、
 浏览器会当页面渲染的（`html`/`htm`/`xhtml`/`shtml`/`svg`/`xml`/`mhtml`…）、以及可执行程序与装机镜像（`exe`/`msi`/`scr`/`vbs`/`js`/`apk`/`dmg`/`iso`/`deb`/`rpm`…）。
@@ -509,7 +523,7 @@ apps/web/
 
 **删除与空间回收**
 
-- 图片：有引用返回 `409 / 2002` + 引用清单；无引用才删文件与记录
+- 图片：有引用返回 `code 2002` + 引用清单；无引用才删文件与记录
 - 附件：删记录后，若没有别的记录引用同一 `storage_key` 才删文件（同一份文件可被多篇文章共用）
 - `DELETE /media/{id}/original`：只删原图、保留四档变体，置 `orig_archived=1`；此后不能 `retry`（原图是重新转码的唯一来源）
 - **原图与附件都不自动清理**：它们是唯一副本。回收空间只能在 `/admin` 的存储管理里手动操作（删原图保变体、清理孤儿文件）
@@ -534,11 +548,12 @@ apps/web/
 | 时间展示 | 站点时区 `Asia/Shanghai`；存储 UTC |
 | SEO | 每页唯一 `title/description/canonical`；文章页输出 `Article` JSON-LD；`sitemap.xml` 仅含 published；`rss.xml` 全文；`robots.txt` 禁 `/admin`、`/preview` |
 | 草稿隔离 | 未发布内容在任何公开接口、sitemap、RSS、搜索中均不可见 |
-| 410 | `archived` 与已删除文章返回 410，不返回 404 |
+| 410 | `archived` 与已删除文章：API 返回 `code 1007`（HTTP 200），页面仍返回 HTTP **410**（由 `middleware.ts` 决定），不返回 404 |
 
 **410 的落点**：App Router 的页面无法自定义状态码（`notFound()` 只会给 404），所以
 `/posts/{slug}` 的 410 由 `apps/web/middleware.ts` 在进入页面前探测 `GET /api/posts/{slug}`
-并直接返回一份独立的 410 HTML；客户端导航（RSC 请求）不走这条路径，由页面按 404 兜底。
+的**信封 `code`**（`1007`）并直接返回一份独立的 410 HTML；客户端导航（RSC 请求）不走这条路径，
+由页面按 `code 1002`/`1007` 走 404 兜底。
 
 ---
 
@@ -614,12 +629,12 @@ apps/web/
 
 | 门禁 | 对应天 | 必过断言 |
 | --- | --- | --- |
-| G1 骨架与鉴权 | D1–D3 | 空库全量迁移成功（23 表 + FTS 触发器）；`curl 127.0.0.1:8640/api/admin/posts` = 404；`curl 127.0.0.1:8640/healthz` = 404；`curl 公网IP:8641` 连接拒绝；5 次错误锁定 30min；会话 7 天过期；登出即失效；未登录 = 401/1000；无 CSRF = 403/1001；响应体为 `{code,data,msg}` |
-| G2 文章与渲染 | D4–D6 | 草稿不可见；slug 冲突 = 409/2001；`<script>` 被剥离；自动保存不产生多余 revision；发布后立即可见；编辑器预览 = 发布结果；2 字中文词可搜到；归档 = 410 |
-| G3 媒体与附件 | D7–D8 / v1.13 | 31MB 拒绝 = 413；50MP 拒绝 = 2003；同图去重；引用删除 = 409/2002 + 清单；四档变体可访问；转码峰值 <300MB；GPS EXIF 不出现在输出图；HEIC 被拒并有提示；原图永久保留；附件上传落 `file.dir`、`.php`/`.html`/`.exe` = 415/2007、超限 = 413/2008；`/go` 响应带 `Content-Disposition: attachment` + `octet-stream` + `nosniff`；`GET /storage` 的孤儿与缺失清单与磁盘一致 |
+| G1 骨架与鉴权 | D1–D3 | 空库全量迁移成功（23 表 + FTS 触发器）；`curl 127.0.0.1:8640/api/admin/posts` = 404（NoRoute 例外）；`curl 127.0.0.1:8640/healthz` = 404；`curl 公网IP:8641` 连接拒绝；5 次错误锁定 30min；会话 7 天过期；登出即失效；未登录 = 200 + `code 1000`；无 CSRF = 200 + `code 1001`；响应体为 `{code,data,msg}` |
+| G2 文章与渲染 | D4–D6 | 草稿不可见；slug 冲突 = 200 + `code 2001`；`<script>` 被剥离；自动保存不产生多余 revision；发布后立即可见；编辑器预览 = 发布结果；2 字中文词可搜到；归档 = 200 + `code 1007`（页面 410） |
+| G3 媒体与附件 | D7–D8 / v1.13 | 31MB 拒绝 = 200 + `code 2003`；50MP 拒绝 = 200 + `code 2003`；同图去重；引用删除 = 200 + `code 2002` + 清单；四档变体可访问；转码峰值 <300MB；GPS EXIF 不出现在输出图；HEIC 被拒并有提示；原图永久保留；附件上传落 `file.dir`、`.php`/`.html`/`.exe` = 200 + `code 2007`、超限 = 200 + `code 2008`；`/go` 响应带 `Content-Disposition: attachment` + `octet-stream` + `nosniff`；`GET /storage` 的孤儿与缺失清单与磁盘一致 |
 | G4 公开端 | D9–D10 | 375px 无横向滚动；分页 + 标签组合正确；404 无堆栈；`srcset` 生效；系列/友链/关于页可访问 |
-| G5 互动 | D11–D12 | 评论 3/10min 限流；嵌套 ≤2 层；spam 不进公开列表；点赞幂等；同 visitor 10 分钟内 PV 只 +1；`stats_daily` 按上海时区切日 |
-| G6 发布控制 | D13 | 定时发布到点生效（误差 <90s）；回滚生成新 revision；预览链接 24h 后 = 410/2006；`cleanup` 能删掉构造的过期数据 |
+| G5 互动 | D11–D12 | 评论 3/10min 限流 = 200 + `code 1005`；嵌套 ≤2 层；spam 不进公开列表；点赞幂等；同 visitor 10 分钟内 PV 只 +1；`stats_daily` 按上海时区切日 |
+| G6 发布控制 | D13 | 定时发布到点生效（误差 <90s）；回滚生成新 revision；预览链接 24h 后 = 200 + `code 2006`；`cleanup` 能删掉构造的过期数据 |
 | G7 SEO 与部署 | D15–D16 | sitemap 无草稿；RSS 校验通过；JSON-LD 无错误；canonical 唯一；`kill -9` 后 30s 自愈；隧道可登录；nginx 静态图片可访问；证书续期 dry-run 通过 |
 | G8 备份、测试与性能 | D17–D19 | `VACUUM INTO` 可还原；空机恢复演练成功；单测/接口/E2E 全绿；service 覆盖率 ≥70%；TTFB <300ms；LCP <2.5s；内存不超 §15 |
 
@@ -756,7 +771,7 @@ apps/web/
 
 一个功能算"完成"，当且仅当：
 
-- [ ] 接口与 §5 契约一致（路径、入参、出参、`code`、HTTP 状态）
+- [ ] 接口与 §5 契约一致（路径、入参、出参、`code`；业务失败一律 HTTP 200，例外见 §5 清单）
 - [ ] 表结构与 §4 一致，且通过 migration 创建
 - [ ] §16 对应门禁断言全部通过
 - [ ] 无 §17.1 禁止项；新增依赖已在 §17.2 登记
@@ -785,6 +800,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.14 | 2026-10-20 | **业务错误统一 HTTP 200**：`response.FailWithDetailed` 固定 `200`，成功/失败只由信封 `code` 区分（gin-vue-admin 风格）；`data` 语义不变（无附加数据仍为 `null`，字段错误仍为 `[{field,message}]`），失败仍 `Abort`；新增 `response.FailWithHTTPStatus` 只给三个 engine 的 `NoRoute` 保留真实 404 + `code 1002`；`errs.HTTPStatus` / `AppError.HTTPStatus` 保留但注明不再决定状态码；前端 `fetcher.ts`、`lib/api/public.ts`（`isApiError` → `isApiCode`）、`middleware.ts`（按 `code 1007` 回 410 页面）、评论与点赞组件的错误分支全部改按 `code`；§5 补「保留真实 HTTP 状态码的例外清单」：健康检查 200/503、静态直出与文件流、301/302 跳转、ETag 304、`NoRoute` 404 |
 | 1.13 | 2026-10-20 | **图床下线，图片与附件全部本地自托管**：删除 Cloudreve/WebDAV 集成（`cloudreve.*` 配置、`gowebdav` 依赖、`media_archive` 任务、`media.archive` 审计、设置页图床块），C10 扩为"图片与附件都不入库、不上 CDN/对象存储"；原图**永久保留**（取消 30 天清理），「查看原图」改指同源 `/uploads/{key}/original.{ext}`；新增附件本地上传 `POST /attachments/upload`（multipart，落 `file.dir/{sha[:2]}/{sha256}{ext}`，按 sha256 去重）与附件安全黑名单（`415/2007`、`413/2008`），公开 `/attachments/{id}/go` 对本地附件直接下发（`octet-stream` + `Content-Disposition` + `nosniff` + Range）、对外链附件仍 302；新增 `GET /storage` 与 `POST /storage/cleanup`（占用统计、孤儿与缺失对账、孤儿清理）与 `DELETE /media/{id}/original`（删原图保变体）；`post_attachments` 增 `storage_key`/`mime`（migration 000003），`backup` 同时快照 `files/`，`cleanup` 不再动原图与附件 |
 | 1.12 | 2026-10-19 | D14 内容管理与运维闭环（M8）：`tags`/`series`/`links`/`redirects`/`attachments` 管理端 CRUD（`GET|POST /x`、`PUT|DELETE /x/{id}`，分类列表带未删除文章数、删分类不删文章）；公开 `GET /attachments/{id}/go`（302 + `clicks+1`）与公开边缘按 `redirects.from_path` 精确 301/302（`hits+1`）；`GET|PUT /settings` 只允许改 `imgBaseUrl` / `siteTimezone` 并强制 `content_version+1`，图床口令永不返回；管理端 `GET /jobs` 与 `GET /audit-logs` 分页；web 新增标签/系列/友链/跳转/附件/任务/审计/设置页 |
 | 1.11 | 2026-10-19 | D13 发布控制（M7）：新增 `POST /posts/{id}/schedule`（未来时间 → `scheduled` + 投递 `publish_scheduled` 任务，`unpublish`/回草稿撤任务）与 `POST /jobs`（手动投递 `cleanup`/`backup`/`link_check`）；`POST /posts/{id}/revisions/{rid}/restore` 回滚时**新写一条 revision**；预览链接改为一次性（首次访问写 `used_at`，之后或过期 = 410/2006），公开 `GET /preview/{token}` 为 `no-store`；§13 明确周期任务（backup 03:00 / cleanup 04:00 / link_check 周一 05:00，按站点时区，判据是当天是否已有同类型任务） |

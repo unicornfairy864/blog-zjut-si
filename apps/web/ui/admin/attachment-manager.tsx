@@ -614,7 +614,7 @@ export function AttachmentManager() {
     }
   }
 
-  /** 上传本地附件；失败时把信封的 msg（415 / 413 等）直接显示出来。 */
+  /** 上传本地附件；失败时把信封的 msg（code 2007 / 2008 等）直接显示出来。 */
   async function upload(input: AttachmentUploadInput): Promise<boolean> {
     setBusy(true);
     setError(null);

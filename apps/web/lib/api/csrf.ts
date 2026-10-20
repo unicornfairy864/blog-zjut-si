@@ -38,7 +38,7 @@ export function getCSRFToken(): string | null {
   return memoryToken;
 }
 
-/** 登出或 401 后清空令牌。 */
+/** 登出或 code 1000（会话失效）后清空令牌。 */
 export function clearCSRFToken(): void {
   memoryToken = null;
   if (typeof window !== "undefined") {

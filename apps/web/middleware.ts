@@ -11,7 +11,8 @@ import { SITE } from "@/lib/constants/site";
  * public 页与管理页都声明 force-dynamic，所以每份 HTML 的 nonce 都是当次的。
  *
  * 另外：归档 / 已删除的文章要返回 **410**，而 App Router 的页面无法自定义状态码
- * （`notFound()` 只会给 404），所以详情路径在这里先问一次 API，是 410 就直接回。
+ * （`notFound()` 只会给 404），所以详情路径在这里先问一次 API，信封 `code === 1007`
+ * 就直接回这个 410 页面（页面级状态码，与 API 一律 200 的契约无关）。
  * 客户端导航（RSC 请求）交给页面按 404 处理，避免把 HTML 塞进 RSC 响应。
  */
 const isDev = process.env.NODE_ENV !== "production";
@@ -47,7 +48,12 @@ function isClientNavigation(request: NextRequest): boolean {
   );
 }
 
-/** 问一次 API：这篇文章是不是已下线（410）。失败一律当作"不是"，交给页面处理。 */
+/**
+ * 问一次 API：这篇文章是不是已下线。
+ *
+ * v1.14 起业务错误一律 HTTP 200，所以只能解析信封里的 `code`（1007 = 已下线）；
+ * 网络失败、非信封响应一律当作"不是"，交给页面按 404 处理。
+ */
 async function isGone(pathname: string): Promise<boolean> {
   const slug = pathname.slice("/posts/".length);
   try {
@@ -59,7 +65,8 @@ async function isGone(pathname: string): Promise<boolean> {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       },
     );
-    return response.status === 410;
+    const envelope = (await response.json()) as { code?: number };
+    return envelope.code === 1007;
   } catch {
     return false;
   }

@@ -24,11 +24,11 @@ export interface PreviewPost {
  * 公开预览接口。
  *
  * **只允许在服务端组件里调用**：接口是 `no-store` 且一次性——首次访问写 `used_at`
- * 并返回内容，之后或超过 24h 就是 `410 / 2006`。在浏览器里调会白白烧掉令牌，
- * 而且 410 也没法渲染成"链接已失效"的页面（服务端才能决定 HTTP 语义）。
+ * 并返回内容，之后或超过 24h 就是 `code 2006`（v1.14 起失败也是 HTTP 200）。
+ * 在浏览器里调会白白烧掉令牌，而且 410 页面只能由服务端决定 HTTP 语义。
  */
 export const publicPreviewApi = {
-  /** 取一次性预览内容；token 不存在 → 404，已用 / 过期 → 410。 */
+  /** 取一次性预览内容；token 不存在 → code 1002，已用 / 过期 → code 2006。 */
   get(token: string) {
     return apiFetch<PreviewPost>(`/api/preview/${encodeURIComponent(token)}`);
   },

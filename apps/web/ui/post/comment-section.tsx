@@ -26,10 +26,10 @@ export interface CommentSectionProps {
   allowComments: boolean;
 }
 
-/** 把接口错误翻译成人话，429 单独提示。 */
+/** 把接口错误翻译成人话，限流（code 1005）单独提示。 */
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
-    if (caught.status === 429 || caught.code === 1005) {
+    if (caught.code === 1005) {
       return "评论太频繁了，请 10 分钟后再试。";
     }
     return caught.message;

@@ -581,7 +581,7 @@ func (s MediaService) Item(media *model.Media) MediaItem {
 	return toMediaItem(media, s.baseURL())
 }
 
-// Delete 删除未被引用的媒体；被引用时返回 409 / 2002 与清单（§10）。
+// Delete 删除未被引用的媒体；被引用时返回 code 2002 与清单（§10）。
 func (s MediaService) Delete(id int64, actor PostActor) error {
 	media, err := model.FindMediaByID(global.DB, id)
 	if err != nil {

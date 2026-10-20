@@ -9,7 +9,7 @@ import { swrKeys } from "@/lib/swr/keys";
 /**
  * 当前管理端会话。
  *
- * 管理页 layout 先调用它：401 直接跳 /admin/login，避免先渲染再闪回（agent.md §8）。
+ * 管理页 layout 先调用它：code 1000（未登录）直接跳 /admin/login，避免先渲染再闪回（agent.md §8）。
  */
 export function useAuth() {
   const { data, error, isLoading, mutate } = useSWR<MeResult, ApiError>(

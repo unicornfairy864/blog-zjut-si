@@ -15,12 +15,9 @@ export interface PostInteractionsProps {
 /** 未加载时的占位：SSR HTML 里绝不能出现真实计数（agent.md §17.1）。 */
 const PLACEHOLDER = "—";
 
-/** 把点赞失败翻译成人话；限流单独说，用户才知道等一会儿还有效。 */
+/** 把点赞失败翻译成人话；限流（code 1005）单独说，用户才知道等一会儿还有效。 */
 function describeActionError(caught: unknown): string {
-  if (
-    caught instanceof ApiError &&
-    (caught.status === 429 || caught.code === 1005)
-  ) {
+  if (caught instanceof ApiError && caught.code === 1005) {
     return "操作过于频繁，请稍后再试";
   }
   return "操作失败，请稍后再试";

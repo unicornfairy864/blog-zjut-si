@@ -12,7 +12,7 @@ import (
 // PageApi 处理 GET /api/pages/{slug}。
 type PageApi struct{}
 
-// Detail 处理 GET /api/pages/{slug}：不存在 → 404 / 1002，软删 → 410 / 1007。
+// Detail 处理 GET /api/pages/{slug}：不存在 → code 1002，软删 → code 1007（都是 HTTP 200）。
 func (PageApi) Detail(c *gin.Context) {
 	page, err := service.ServiceGroupApp.Public.Page(strings.TrimSpace(c.Param("slug")))
 	if err != nil {

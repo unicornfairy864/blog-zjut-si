@@ -160,10 +160,10 @@ export const adminAttachmentApi = {
   /**
    * 上传本地附件（multipart/form-data）：文件存进 file.dir，记录带 storage_key 与 mime。
    *
-   * 失败语义（信封的 msg 直接给用户看即可）：
-   * - `400 / 1003` 参数问题（缺 file / postId 非正整数）；
-   * - `415 / 2007` 扩展名或文件名被安全黑名单拒绝（如 .php / .html / .exe / .svg、隐藏文件）；
-   * - `413 / 2008` 超过 `file.maxBytes` 上限。
+   * 失败语义（信封的 msg 直接给用户看即可；v1.14 起失败也是 HTTP 200，只看 code）：
+   * - `code 1003` 参数问题（缺 file / postId 非正整数）；
+   * - `code 2007` 扩展名或文件名被安全黑名单拒绝（如 .php / .html / .exe / .svg、隐藏文件）；
+   * - `code 2008` 超过 `file.maxBytes` 上限。
    */
   upload(input: AttachmentUploadInput) {
     const form = new FormData();
@@ -193,7 +193,7 @@ export const adminAttachmentApi = {
     });
   },
 
-  /** 删除附件；记录没了，但已经发出去的 /go 地址会变成 404。 */
+  /** 删除附件；记录没了，但已经发出去的 /go 地址会变成 code 1002。 */
   remove(id: number) {
     return apiFetch<null>(`/api/admin/attachments/${id}`, { method: "DELETE" });
   },
@@ -224,7 +224,7 @@ export const adminJobApi = {
     return apiFetch<AdminJob>("/api/admin/jobs", { json: { type } });
   },
 
-  /** 把 failed 任务放回 pending 并立刻到期；非 failed → 409 / 1004。 */
+  /** 把 failed 任务放回 pending 并立刻到期；非 failed → code 1004。 */
   retry(id: number) {
     return apiFetch<AdminJob>(`/api/admin/jobs/${id}/retry`, { json: {} });
   },

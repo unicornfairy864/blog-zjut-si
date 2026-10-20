@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { isApiError, publicApi } from "@/lib/api/public";
+import { isApiCode, publicApi } from "@/lib/api/public";
 import { Pagination } from "@/ui/shared/pagination";
 import { PostCard } from "@/ui/post/post-card";
 
@@ -49,7 +49,7 @@ export default async function TagDetailPage({
   try {
     result = await publicApi.tag(slug, { page, pageSize: PAGE_SIZE });
   } catch (error) {
-    if (isApiError(error, 404)) {
+    if (isApiCode(error, 1002)) {
       notFound();
     }
     throw error;

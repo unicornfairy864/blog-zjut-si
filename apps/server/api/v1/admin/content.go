@@ -257,7 +257,7 @@ func (ContentApi) DeleteRedirect(c *gin.Context) {
 	response.OkWithData(c, gin.H{"deleted": true})
 }
 
-// bindTaxonomy 绑定标签 / 系列请求体；绑定失败即写出 400/1003。
+// bindTaxonomy 绑定标签 / 系列请求体；绑定失败即写出 code 1003（HTTP 200）。
 func bindTaxonomy(c *gin.Context) (service.TaxonomyInput, bool) {
 	var req taxonomyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

@@ -24,7 +24,7 @@ func (TagApi) List(c *gin.Context) {
 	response.OkWithETag(c, gin.H{"list": tags})
 }
 
-// Detail 处理 GET /api/tags/{slug}：标签不存在 → 404 / 1002。
+// Detail 处理 GET /api/tags/{slug}：标签不存在 → HTTP 200 + code 1002。
 func (TagApi) Detail(c *gin.Context) {
 	var page request.PageInfo
 	if err := c.ShouldBindQuery(&page); err != nil {

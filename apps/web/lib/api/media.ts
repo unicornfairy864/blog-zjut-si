@@ -74,7 +74,7 @@ export const adminMediaApi = {
     return apiFetch<null>(`/api/admin/media/${id}`, { method: "DELETE" });
   },
 
-  /** 从本地原图重新生成变体；原图已删除时抛 ApiError(404)。 */
+  /** 从本地原图重新生成变体；原图已删除时抛 ApiError(code 1002)。 */
   retry(id: number) {
     return apiFetch<MediaItem>(`/api/admin/media/${id}/retry`, { json: {} });
   },

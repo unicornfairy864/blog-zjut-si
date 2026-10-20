@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { isApiError, publicApi, type Paged, type PublicPostListItem } from "@/lib/api/public";
+import { isApiCode, publicApi, type Paged, type PublicPostListItem } from "@/lib/api/public";
 import { Pagination } from "@/ui/shared/pagination";
 import { PostCard } from "@/ui/post/post-card";
 
@@ -47,7 +47,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     try {
       result = await publicApi.search(keyword, { page, pageSize: PAGE_SIZE });
     } catch (error) {
-      if (!isApiError(error, 400)) {
+      if (!isApiCode(error, 1003)) {
         throw error;
       }
       result = EMPTY;

@@ -2,9 +2,14 @@ import { visitorHeaders } from "@/lib/visitor";
 
 import { ApiError, apiFetch } from "./fetcher";
 
-/** 判断是否是指定 HTTP 状态的业务错误（404 走 notFound、410 已下线）。 */
-export function isApiError(error: unknown, status: number): boolean {
-  return error instanceof ApiError && error.status === status;
+/**
+ * 判断是否是指定业务错误码的错误。
+ *
+ * v1.14 起业务错误一律 HTTP 200，所以按信封里的 `code` 判断，不看 HTTP 状态：
+ * 1002 = 不存在（走 notFound）、1007 = 已下线（由 middleware 回 410 页面）。
+ */
+export function isApiCode(error: unknown, code: number): boolean {
+  return error instanceof ApiError && error.code === code;
 }
 
 /** 公开端探活响应。 */
@@ -235,7 +240,7 @@ function query(params: Record<string, string | number | undefined>): string {
  * 公开端接口（D9/D10）。
  *
  * 只在服务端组件里调用；浏览器不直连 8640。错误统一抛 `ApiError`
- * （`status === 404` 走 notFound，`status === 410` 由 middleware 拦截）。
+ * （`code === 1002` 走 notFound，`code === 1007` 由 middleware 拦截成 410 页面）。
  */
 export const publicApi = {
   ping() {
@@ -254,7 +259,7 @@ export const publicApi = {
     );
   },
 
-  /** 文章详情；归档/已删除返回 410，草稿返回 404。 */
+  /** 文章详情；归档/已删除返回 code 1007，草稿返回 code 1002。 */
   post(slug: string) {
     return apiFetch<PublicPostDetail>(`/api/posts/${encodeURIComponent(slug)}`);
   },
@@ -363,7 +368,7 @@ export const publicApi = {
     return apiFetch<{ list: LinkItem[] }>("/api/links");
   },
 
-  /** 静态页；不存在 404，软删 410。 */
+  /** 静态页；不存在 code 1002，软删 code 1007。 */
   page(slug: string) {
     return apiFetch<PageDetail>(`/api/pages/${encodeURIComponent(slug)}`);
   },

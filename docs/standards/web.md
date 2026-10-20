@@ -39,11 +39,14 @@ fetch("http://127.0.0.1:8640/api/posts");
 
 `apiFetch` 负责：拼基址、`credentials: same-origin`、注入 `X-CSRF-Token`、解 `{code,data,msg}` 信封、抛 `ApiError{code,status,message,details}`。组件只捕获 `ApiError`。
 
+**业务错误一律 HTTP 200，只按 `code` 分支**（v1.14 起）：`!response.ok` 只在"响应不是信封"时兜底
+（nginx 502 HTML 等），`status` 字段只作诊断，不用来判成功/失败。
+
 ## 3. 管理端会话与 CSRF
 
-- `app/(admin)/admin/(protected)/layout.tsx`：`useAuth()` → `isLoading` 时只渲染加载态；`401` 时 `router.replace("/admin/login")`，避免闪烁。
+- `app/(admin)/admin/(protected)/layout.tsx`：`useAuth()` → `isLoading` 时只渲染加载态；`code 1000`（未登录，HTTP 200）时 `router.replace("/admin/login")`，避免闪烁。
 - `useAuth()` 内部会调 `GET /auth/me` 并把 `csrfToken` 存入内存（`lib/api/csrf.ts`）。
-- 写请求自动带 `X-CSRF-Token`；403 CSRF 失败时提示用户刷新页面，不自动重试。
+- 写请求自动带 `X-CSRF-Token`；CSRF 失败（`code 1001`）时提示用户刷新页面，不自动重试。
 
 ## 4. 组件约定
 

@@ -69,7 +69,8 @@ ssh -N -D 1080 user@your-host
 ```
 
 - 浏览器请固定用 `http://localhost:8641`。`localhost` 与 `127.0.0.1` 在 cookie 作用域上是两个 host，混用会表现为"刚登录又回到登录页"。
-- 登录页地址是 `/admin/login`；未登录访问 `/admin` 会先请求 `GET /api/admin/auth/me`，401 后跳回登录页。
+- 登录页地址是 `/admin/login`；未登录访问 `/admin` 会先请求 `GET /api/admin/auth/me`，
+  拿到 `code 1000`（HTTP 200）后跳回登录页。
 
 ## 4. 迁移
 
@@ -161,9 +162,9 @@ docker compose start blog
 | --- | --- |
 | 页面 502「页面服务暂不可用」 | Next 没起来：`docker compose logs blog \| grep web`；或 `BLOG_WEB_UPSTREAM` 写错 |
 | 8641 连接被拒绝 | compose 的 ports 是否仍是 `127.0.0.1:8641`；隧道是否建立 |
-| 登录返回 423 | 触发锁定（5 次失败/10 分钟 → 锁 30 分钟）。等 30 分钟自动解锁；不要手改库 |
-| 登录返回 429 | 同用户名 5 次/分钟限流，稍等再试 |
-| 写操作 403，`msg` 为 CSRF 校验失败 | 刷新页面重新 `GET /auth/me` 取 token；确认没有用 `127.0.0.1` 与 `localhost` 混访 |
+| 登录返回 `code 2005`（HTTP 200） | 触发锁定（5 次失败/10 分钟 → 锁 30 分钟）。等 30 分钟自动解锁；不要手改库 |
+| 登录返回 `code 1005`（HTTP 200） | 同用户名 5 次/分钟限流，稍等再试 |
+| 写操作返回 `code 1001`（HTTP 200），`msg` 为 CSRF 校验失败 | 刷新页面重新 `GET /auth/me` 取 token；确认没有用 `127.0.0.1` 与 `localhost` 混访 |
 | 一直跳回登录页 | cookie 被浏览器拦截（无痕/第三方策略）、host 不一致、或系统时间偏差超过 7 天 |
 | 容器反复重启 | 看 `dirty` 是否非空、端口是否被占用、`/data` 权限是否可写 |
 | 容器启动即退出，日志 `加载配置失败` + `创建上传/附件目录失败: mkdir ./data: permission denied` | 数据目录没建或属主不是 1000：`sudo mkdir -p /data/blog/{db,uploads,files,backup} && sudo chown -R 1000:1000 /data/blog`；确认 compose 的 `BLOG_*_DIR` 都是 `/data/blog/...` 绝对路径 |
@@ -221,8 +222,8 @@ sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
 
 ### 11.2 附件
 
-- 上限 `BLOG_FILE_MAX_BYTES`（默认 20MB）；扩展名/文件名黑名单见 agent.md §10，命中 → `415/2007`，
-  超限 → `413/2008`。
+- 上限 `BLOG_FILE_MAX_BYTES`（默认 20MB）；扩展名/文件名黑名单见 agent.md §10，命中 → `code 2007`，
+  超限 → `code 2008`（都是 HTTP 200）。
 - 落盘 `/data/blog/files/{sha[:2]}/{sha256}{ext}`，按内容去重：同一份文件被多篇文章引用时只占一份磁盘，
   删掉记录后若没人再引用才会删文件。
 - 下载只走 `GET /api/attachments/{id}/go`：响应固定 `Content-Disposition: attachment` +
@@ -232,7 +233,7 @@ sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
   ```bash
   ls -l /data/blog/files/*/* | head
   curl -sI https://blog.zjut.si/api/attachments/1/go | head -5     # 期望 200 + attachment 头
-  curl -sI https://blog.zjut.si/api/attachments/9999/go | head -1  # 期望 404
+  curl -s https://blog.zjut.si/api/attachments/9999/go             # 期望 {"code":1002,…}（HTTP 200）
   ```
 
 ### 11.3 空间回收与对账（`/admin/storage`）
@@ -390,13 +391,14 @@ curl -s -X POST http://127.0.0.1:8640/api/posts/<slug>/comments \
   -H 'Content-Type: application/json' \
   -d '{"authorName":"乙","contentMd":"回复","parentId":1}'
 
-# 5) 限流：连发 4 条，第 4 条应为 429 / 1005（3 次 / 10 分钟 / IP）
+# 5) 限流：连发 4 条，第 4 条的响应体 code 应为 1005（3 次 / 10 分钟 / IP）
 for i in 1 2 3 4; do
-  curl -s -o /dev/null -w "%{http_code} " -X POST http://127.0.0.1:8640/api/posts/<slug>/comments \
-    -H 'Content-Type: application/json' -d '{"authorName":"限流","contentMd":"x"}'
+  curl -s -X POST http://127.0.0.1:8640/api/posts/<slug>/comments \
+    -H 'Content-Type: application/json' -d '{"authorName":"限流","contentMd":"x"}' \
+    | grep -o '"code":[0-9-]*'
 done; echo
 
-# 6) 关闭评论的文章 → 403 / 1001
+# 6) 关闭评论的文章 → 响应体 code 1001（HTTP 200）
 #    目前只能用接口或 SQL 关：UPDATE posts SET allow_comments = 0 WHERE slug = '<slug>';
 #    （管理端编辑器的「允许评论」开关排在 D14 管理端补全里一起做）
 
@@ -429,9 +431,9 @@ curl -s -X DELETE -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like # 仍为 0
 # 3) 访客态读是 no-store（不能进任何缓存）
 curl -sI -H "$V" http://127.0.0.1:8640/api/posts/<slug>/stats | grep -i cache-control
 
-# 4) 点赞限流 10 次 / 分钟 / visitor：第 11 次 429 / 1005
+# 4) 点赞限流 10 次 / 分钟 / visitor：第 11 次的响应体 code 为 1005
 for i in $(seq 1 11); do
-  curl -s -o /dev/null -w "%{http_code} " -X POST -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like
+  curl -s -X POST -H "$V" http://127.0.0.1:8640/api/posts/<slug>/like | grep -o '"code":[0-9-]*'
 done; echo
 
 # 5) PV：同 visitor 10 分钟内只 +1，另一个 visitor 再 +1
@@ -448,9 +450,9 @@ curl -s -X POST -H 'Content-Type: application/json' -H 'X-Visitor-Id: test-visit
 curl -s -X POST -H 'Content-Type: application/json' -H "$V" -d '{"path":"/"}' \
   http://127.0.0.1:8640/api/events/view
 
-# 7) 打点字段校验：path 必须以 / 开头，否则 400 / 1003
-curl -s -o /dev/null -w "%{http_code}\n" -X POST -H 'Content-Type: application/json' \
-  -d '{"path":"no-slash"}' http://127.0.0.1:8640/api/events/view
+# 7) 打点字段校验：path 必须以 / 开头，否则响应体 code 1003（HTTP 200）
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"no-slash"}' http://127.0.0.1:8640/api/events/view | grep -o '"code":[0-9-]*'
 ```
 
 落库口径用 sqlite3 对一下（**先停容器**再读，避免 WAL 半写）：
@@ -486,7 +488,7 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/posts/<id>/schedule \
   -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \
   -d "{\"publishedAt\":$AT,\"note\":\"定时\"}"          # status=scheduled，published_at=$AT
 curl -s 'http://127.0.0.1:8641/api/admin/jobs?status=pending'   # 应有一条 publish_scheduled，run_at=$AT
-curl -s -X POST ... -d "{\"publishedAt\":$NOW}"                 # 过去时间 → 400/1003 field=publishedAt
+curl -s -X POST ... -d "{\"publishedAt\":$NOW}"                 # 过去时间 → code 1003（HTTP 200）field=publishedAt
 
 # 2) 到点生效（误差 <90s）：等 3 分钟后再看
 sleep 200
@@ -507,13 +509,13 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/posts/<id>/preview-link \
   -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{}'
 # → {"token":"…","url":"/preview/…","expiresAt":…}
 curl -s -i http://127.0.0.1:8640/api/preview/<token> | head -3   # 200 + Cache-Control: no-store
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8640/api/preview/<token>   # 410（已使用）
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8640/api/preview/deadbeef # 404（形状不对）
+curl -s http://127.0.0.1:8640/api/preview/<token> | grep -o '"code":[0-9-]*'  # 2006（已使用，HTTP 200）
+curl -s http://127.0.0.1:8640/api/preview/deadbeef | grep -o '"code":[0-9-]*' # 1002（形状不对，HTTP 200）
 # 隧道里点开预览地址也能看：http://localhost:8641/preview/<token>（8641 也转 /preview*）
 # 再次生成会作废该文旧的未使用链接
 ```
 
-`410 / 2006` 的另一种构造方式（不用真等 24h）：停容器后
+`code 2006` 的另一种构造方式（不用真等 24h）：停容器后
 
 ```bash
 sqlite3 /data/blog/db/blog.db "UPDATE preview_tokens SET expires_at = strftime('%s','now') - 10;"
@@ -577,7 +579,7 @@ ls -lh /data/blog/backup/   # blog-YYYYMMDD.db + uploads-YYYYMMDD/ + files-YYYYM
 `/admin/redirects`、`/admin/attachments`、`/admin/jobs`、`/admin/audit-logs`、`/admin/settings`。
 
 ```bash
-# 1) 分类：新建 → 改名 → 删除；中文名不填 slug 应 400/1003，slug 撞车 409/2001
+# 1) 分类：新建 → 改名 → 删除；中文名不填 slug 响应体 code 1003，slug 撞车 code 2001（都是 HTTP 200）
 curl -s -X POST http://127.0.0.1:8641/api/admin/tags -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" -d '{"name":"Go","slug":"go","description":""}'
 curl -s -X DELETE http://127.0.0.1:8641/api/admin/tags/<id> -H "X-CSRF-Token: $CSRF"
@@ -595,7 +597,8 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/attachments/upload \
 curl -sI http://127.0.0.1:8640/api/attachments/<id>/go | head -6
 #    200 + Content-Disposition: attachment + Content-Type: application/octet-stream + nosniff
 curl -s -X POST http://127.0.0.1:8641/api/admin/attachments/upload \
-  -H "X-CSRF-Token: $CSRF" -F "postId=<id>" -F "file=@/tmp/shell.php"      # 期望 415/2007
+  -H "X-CSRF-Token: $CSRF" -F "postId=<id>" -F "file=@/tmp/shell.php" \
+  | grep -o '"code":[0-9-]*'                                             # 期望 2007（HTTP 200）
 # 外链附件仍可登记（JSON，shareUrl 必填），/go 对它 302
 curl -s -X POST http://127.0.0.1:8641/api/admin/attachments -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" \
@@ -608,7 +611,7 @@ curl -s http://127.0.0.1:8641/api/admin/storage | head -c 400
 curl -s -X PUT http://127.0.0.1:8641/api/admin/settings -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" -d '{"siteTimezone":"Asia/Shanghai","imgBaseUrl":""}'
 curl -s http://127.0.0.1:8640/api/site | head -c 200       # contentVersion 应比改之前大
-curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # 400/1003
+curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # code 1003（HTTP 200）
 ```
 
 - `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`attachment.upload`、`settings.update`…）。

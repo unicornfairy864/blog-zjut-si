@@ -106,7 +106,7 @@ export function MediaLibrary() {
   /**
    * 删除原图：四档变体保留，但原图不可恢复。
    *
-   * 删掉后 retry 会 404，所以二次确认里要把这一点说清楚。
+   * 删掉后 retry 会 code 1002，所以二次确认里要把这一点说清楚。
    */
   async function handleRemoveOriginal(item: MediaItem) {
     const confirmed = window.confirm(

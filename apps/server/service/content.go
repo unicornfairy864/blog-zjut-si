@@ -752,7 +752,7 @@ func (s ContentService) DeleteAttachment(id int64, actor PostActor) error {
 	return nil
 }
 
-// AttachmentByID 返回单个附件（公开 /attachments/{id}/go 用）；不存在 → 404 / 1002。
+// AttachmentByID 返回单个附件（公开 /attachments/{id}/go 用）；不存在 → code 1002（HTTP 200）。
 func (s ContentService) AttachmentByID(id int64) (*model.PostAttachment, error) {
 	item, err := model.FindAttachmentByID(global.DB, id)
 	if err != nil {
@@ -957,7 +957,7 @@ func taxonomyWriteError(err error, table, name string, excludeID int64) error {
 	return errs.New(errs.ErrorSlugConflict, "slug 已存在，请更换")
 }
 
-// taxonomyNotFoundOr 把 model.ErrNotFound 翻成 404 / 1002，其余错误原样包装。
+// taxonomyNotFoundOr 把 model.ErrNotFound 翻成 code 1002（HTTP 200），其余错误原样包装。
 func taxonomyNotFoundOr(err error, message string) error {
 	if errors.Is(err, model.ErrNotFound) {
 		return errs.New(errs.ErrorNotFound, message)
@@ -1184,7 +1184,7 @@ func ensurePostExists(postID int64) error {
 	return nil
 }
 
-// attachmentNotFoundOr 把 model.ErrNotFound 翻成 404 / 1002，其余错误原样包装。
+// attachmentNotFoundOr 把 model.ErrNotFound 翻成 code 1002（HTTP 200），其余错误原样包装。
 func attachmentNotFoundOr(err error) error {
 	if errors.Is(err, model.ErrNotFound) {
 		return errs.New(errs.ErrorNotFound, "附件不存在")

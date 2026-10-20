@@ -105,7 +105,7 @@ func (MediaApi) List(c *gin.Context) {
 	response.OkWithPage(c, items, total, page.Page, page.PageSize)
 }
 
-// Delete 处理 DELETE /api/admin/media/{id}：被引用时返回 409 / 2002。
+// Delete 处理 DELETE /api/admin/media/{id}：被引用时返回 code 2002（HTTP 200）。
 func (MediaApi) Delete(c *gin.Context) {
 	id, ok := mediaID(c)
 	if !ok {

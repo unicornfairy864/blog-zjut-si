@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/api/v1"
@@ -110,7 +112,8 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			proxy.Serve(c)
 			return
 		}
-		response.FailWithDetailed(c, errs.ErrorNotFound, nil, "接口不存在")
+		// 路由不存在不是业务错误：保留真实 404（§5 例外清单）。
+		response.FailWithHTTPStatus(c, http.StatusNotFound, errs.ErrorNotFound, nil, "接口不存在")
 	})
 	return engine
 }

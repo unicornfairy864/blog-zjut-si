@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { isApiError } from "@/lib/api/public";
+import { isApiCode } from "@/lib/api/public";
 import { publicPreviewApi, type PreviewPost } from "@/lib/api/preview";
 import { formatDateTime } from "@/lib/utils";
 import { PostStatusBadge } from "@/ui/admin/post-status-badge";
@@ -24,7 +24,7 @@ interface PreviewPageProps {
 const MAX_TOKEN_LENGTH = 128;
 
 /**
- * 预览链接失效（410 / 2006）的说明页。
+ * 预览链接失效（`code 2006`，HTTP 200）的说明页。
  *
  * 一次性链接"已用过 / 已过期"是它的**正常归宿**，不是错误，所以这里正常 200 渲染，
  * 不抛异常也不 `notFound()`——否则作者只会看到一个没有上下文的 404。
@@ -82,10 +82,10 @@ export default async function PreviewPage({ params }: PreviewPageProps) {
   try {
     post = await publicPreviewApi.get(token);
   } catch (error) {
-    if (isApiError(error, 404)) {
+    if (isApiCode(error, 1002)) {
       notFound();
     }
-    if (isApiError(error, 410)) {
+    if (isApiCode(error, 1007)) {
       return <ExpiredPreview />;
     }
     // 其余错误（网络 / 5xx）交给 error.tsx 兜底，不要伪装成"链接失效"。

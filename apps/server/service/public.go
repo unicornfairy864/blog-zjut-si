@@ -137,7 +137,7 @@ func (s PublicService) Tags() ([]model.TagWithCount, error) {
 	return tags, nil
 }
 
-// TagPosts 返回某标签下的公开文章分页；标签不存在 → 404 / 1002。
+// TagPosts 返回某标签下的公开文章分页；标签不存在 → code 1002（HTTP 200）。
 func (s PublicService) TagPosts(slug string, page, pageSize int) (TagDetail, error) {
 	tag, err := model.FindTagBySlug(global.DB, slug)
 	if err != nil {
@@ -181,7 +181,7 @@ func (s PublicService) Series() ([]model.SeriesWithCount, error) {
 }
 
 // SeriesDetail 返回系列详情与其文章：series_order 升序、published_at 升序；
-// 系列不存在 → 404 / 1002。
+// 系列不存在 → code 1002（HTTP 200）。
 func (s PublicService) SeriesDetail(slug string) (SeriesDetail, error) {
 	series, err := model.FindSeriesBySlug(global.DB, slug)
 	if err != nil {
@@ -216,7 +216,7 @@ func (s PublicService) Links() ([]model.PublicLinkItem, error) {
 	return items, nil
 }
 
-// Page 返回静态页详情；不存在 → 404 / 1002，软删 → 410 / 1007。
+// Page 返回静态页详情；不存在 → code 1002，软删 → code 1007（都是 HTTP 200）。
 func (s PublicService) Page(slug string) (model.PublicPageDetail, error) {
 	page, err := model.FindPageBySlug(global.DB, slug, true)
 	if err != nil {

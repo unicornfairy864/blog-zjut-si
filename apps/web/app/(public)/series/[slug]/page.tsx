@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { isApiError, publicApi } from "@/lib/api/public";
+import { isApiCode, publicApi } from "@/lib/api/public";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,7 @@ export default async function SeriesDetailPage({
   try {
     result = await publicApi.seriesDetail(slug);
   } catch (error) {
-    if (isApiError(error, 404)) {
+    if (isApiCode(error, 1002)) {
       notFound();
     }
     throw error;

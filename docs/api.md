@@ -6,7 +6,10 @@
 ## 通用约定
 
 - 前缀 `/api`；成功 `HTTP 200` + `{"code":0,"data":<数据>,"msg":"操作成功"}`
-- 失败：HTTP 状态由 `code` 查表；`data` 放字段错误或引用清单
+- 失败：**HTTP 200** + `{"code":<数字码>,"data":<字段错误\|引用清单\|null>,"msg":"<人话>"}`；
+  成功/失败只由 `code` 区分（v1.14 起）。**本文档只按 code 断言，不按 HTTP 状态断言**
+- 例外（仍保留真实状态码）：`/healthz`、`/readyz` 200/503；静态直出与本地附件文件流；`redirects` 301/302
+  与外链附件 302；公开读接口的 `ETag` 304；路由不存在的 404（`code 1002`）
 - 分页入参 `page`(≥1) / `pageSize`(1–50, 默认 20) / `keyword`；出参 `data:{list,total,page,pageSize}`
 - 公开读接口带 `Cache-Control: no-cache` 与强 `ETag`，支持 `If-None-Match → 304`
 - 管理端写操作必须带 `X-CSRF-Token`（值来自 `GET /auth/me` 的 `csrfToken`）
@@ -67,11 +70,11 @@ href="{img_base_url}/{storage_key}/original.{ext}" target="_blank" rel="noopener
 同一处还会给正文里的本站图片补 `srcset`（该图的四档变体，不足两档不输出）、`sizes`、
 `width`/`height` 与 `loading="lazy" decoding="async"`；`media` 表里查不到的图片原样保留。
 
-| HTTP | code | 场景 |
-| --- | --- | --- |
-| 200 | 0 | 已发布 |
-| 404 | 1002 | 不存在 / 草稿 / 定时（不泄露存在性） |
-| 410 | 1007 | 已归档 / 已删除 |
+| code | 场景 |
+| --- | --- |
+| 0 | 已发布 |
+| 1002 | 不存在 / 草稿 / 定时（不泄露存在性） |
+| 1007 | 已归档 / 已删除 |
 
 ### `GET /api/posts/{slug}/related`
 
@@ -103,7 +106,7 @@ href="{img_base_url}/{storage_key}/original.{ext}" target="_blank" rel="noopener
 }
 ```
 
-不返回邮箱、`ip_hash`、`ua`。文章不存在 / 草稿 → `404 / 1002`，归档 / 已删除 → `410 / 1007`。
+不返回邮箱、`ip_hash`、`ua`。文章不存在 / 草稿 → `200 + code 1002`，归档 / 已删除 → `200 + code 1007`。
 
 顶层评论被标为 `spam` / `deleted` 后，它下面**已过审**的回复不会被藏起来，而是降级成顶层输出
 （避免评论凭空消失）；所以 `total`（该文 `approved` 总数）可能大于 `list` 里实际可见的条数。
@@ -129,20 +132,20 @@ href="{img_base_url}/{storage_key}/original.{ext}" target="_blank" rel="noopener
 { "code": 0, "data": { "id": 5, "status": "pending", "createdAt": 1760000200 }, "msg": "操作成功" }
 ```
 
-新评论一律 `pending`，审核通过后才出现在公开列表。限流 **3 次 / 10 分钟 / IP**，超限 `429 / 1005`；
-文章 `allow_comments = 0` 时 `403 / 1001`。
+新评论一律 `pending`，审核通过后才出现在公开列表。限流 **3 次 / 10 分钟 / IP**，超限 `200 + code 1005`；
+文章 `allow_comments = 0` 时 `200 + code 1001`。
 
 ### `POST /api/posts/{slug}/like` · `DELETE /api/posts/{slug}/like`
 
 点赞 / 取消点赞，两者都**幂等**：重复 POST 不会重复计数，没点过就 DELETE 也返回 200。
-限流 **10 次 / 分钟 / visitor**，超限 `429 / 1005`。
+限流 **10 次 / 分钟 / visitor**，超限 `200 + code 1005`。
 
 ```json
 { "code": 0, "data": { "liked": true, "likeCount": 3 }, "msg": "操作成功" }
 ```
 
 `liked` 是该 visitor 当前的状态；`likeCount` 每次都按 `likes` 表重算后写回 `posts.like_count`。
-文章不存在 → `404 / 1002`；已归档或已删除 → `410 / 1007`。
+文章不存在 → `200 + code 1002`；已归档或已删除 → `200 + code 1007`。
 
 ### `GET /api/posts/{slug}/stats`
 
@@ -191,8 +194,8 @@ PV 打点。请求体：
   }, "msg": "操作成功" }
 ```
 
-- 首次访问写 `used_at` 并返回内容；**再次访问或超过 24h → `410 / 2006`**。
-- token 不存在 → `404 / 1002`；token 是 64 位 hex（32 字节随机），库里只存 `token_hash`。
+- 首次访问写 `used_at` 并返回内容；**再次访问或超过 24h → `200 + code 2006`**。
+- token 不存在 → `200 + code 1002`；token 是 64 位 hex（32 字节随机），库里只存 `token_hash`。
 
 ### `GET /api/site`
 
@@ -223,7 +226,7 @@ PV 打点。请求体：
 
 ### `GET /api/tags/{slug}`
 
-标签详情：`tag` + 该标签下的分页文章。标签不存在 → `404 / 1002`。
+标签详情：`tag` + 该标签下的分页文章。标签不存在 → `200 + code 1002`。
 
 ```json
 {
@@ -273,7 +276,7 @@ PV 打点。请求体：
 
 ### `GET /api/series/{slug}`
 
-系列详情；文章按 `series_order` 升序、其次发布时间升序。系列不存在 → `404 / 1002`。
+系列详情；文章按 `series_order` 升序、其次发布时间升序。系列不存在 → `200 + code 1002`。
 
 ```json
 {
@@ -300,7 +303,7 @@ PV 打点。请求体：
 
 ### `GET /api/pages/{slug}`
 
-静态页（`/about` 等）。不存在 → `404 / 1002`；软删 → `410 / 1007`。
+静态页（`/about` 等）。不存在 → `200 + code 1002`；软删 → `200 + code 1007`。
 
 ```json
 {
@@ -316,7 +319,7 @@ PV 打点。请求体：
 ### `GET /api/search?q=关键词`
 
 ≥3 字走 FTS5（trigram，`bm25` 排序），1–2 字走 `LIKE` 兜底；只搜已发布文章。
-`q` 长度 1–64 字，超限 `400 / 1003`。
+`q` 长度 1–64 字，超限 `200 + code 1003`。
 
 ## 管理组（8641，只经 SSH 隧道）
 
@@ -328,7 +331,7 @@ PV 打点。请求体：
 | `GET /api/admin/auth/me` | 需要登录；返回 `admin`、`csrfToken`、`expiresAt` |
 | `POST /api/admin/auth/logout` | 需要登录 + CSRF；删除会话并清 cookie |
 
-登录失败码：`1000`(401) 口令错误、`1003`(400) 参数非法、`1005`(429) 限流、`2005`(423) 已锁定。
+登录失败码（全部 HTTP 200）：`1000` 口令错误、`1003` 参数非法、`1005` 限流、`2005` 已锁定。
 
 ### 文章
 
@@ -340,7 +343,7 @@ PV 打点。请求体：
 | `PUT /api/admin/posts/{id}` | 覆盖式保存，必须带 `title` 与 `contentMd` |
 | `PATCH /api/admin/posts/{id}` | 局部更新；`nil` 字段不改 |
 | `DELETE /api/admin/posts/{id}` | 软删（回收站，30 天后物理删除） |
-| `POST /api/admin/posts/{id}/publish` | 发布；写版本快照并 `revision+1`。已发布文章内容有变化时再发布 = 为改动记新版本（保留原 `published_at`）；内容没变 → `409 / 1004` |
+| `POST /api/admin/posts/{id}/publish` | 发布；写版本快照并 `revision+1`。已发布文章内容有变化时再发布 = 为改动记新版本（保留原 `published_at`）；内容没变 → `200 + code 1004` |
 | `POST /api/admin/posts/{id}/unpublish` | 取消发布 / 取消归档，回到草稿 |
 | `GET /api/admin/posts/{id}/revisions` | 版本列表，最多 50 条 |
 | `POST /api/admin/posts/preview` | 渲染未保存正文，不落库；与发布结果同源 |
@@ -351,14 +354,15 @@ PV 打点。请求体：
 
 文章错误码：
 
-| code | HTTP | 场景 |
-| --- | --- | --- |
-| 1002 | 404 | 文章不存在 |
-| 1003 | 400 | 参数校验失败（`data` 为字段错误数组） |
-| 1004 | 409 | 非法状态迁移（如重复发布、草稿归档） || 1005 | 429 | 公开接口限流 |
-| 1007 | 410 | 公开端访问已归档/已删除文章 |
-| 2001 | 409 | slug 冲突 |
-| 2004 | 409 | 已发布文章改 slug 未写跳转 |
+| code | 场景 |
+| --- | --- |
+| 1002 | 文章不存在 |
+| 1003 | 参数校验失败（`data` 为字段错误数组） |
+| 1004 | 非法状态迁移（如重复发布、草稿归档） |
+| 1005 | 公开接口限流 |
+| 1007 | 公开端访问已归档/已删除文章 |
+| 2001 | slug 冲突 |
+| 2004 | 已发布文章改 slug 未写跳转 |
 
 ### 预览
 
@@ -371,12 +375,12 @@ PV 打点。请求体：
 
 | 端点 | 说明 |
 | --- | --- |
-| `POST /api/admin/posts/{id}/schedule` | `{"publishedAt": 1760000000, "note": "定时发布"}`；`publishedAt` 必须是**未来**时间（否则 `400 / 1003`，`data` 带 `field=publishedAt`），落 `scheduled` 并投递 `publish_scheduled` 任务 |
+| `POST /api/admin/posts/{id}/schedule` | `{"publishedAt": 1760000000, "note": "定时发布"}`；`publishedAt` 必须是**未来**时间（否则 `200 + code 1003`，`data` 带 `field=publishedAt`），落 `scheduled` 并投递 `publish_scheduled` 任务 |
 | `POST /api/admin/posts/{id}/unpublish` | 退回草稿，同时撤掉该文待执行的 `publish_scheduled` 任务 |
 | `POST /api/admin/posts/{id}/revisions/{rid}/restore` | `{"note": "回滚"}` 可选；用旧版本覆盖正文并**再写一条新 revision**（`revision+1`），历史不被改写 |
 | `GET /api/admin/posts/{id}/revisions` | `data: {"list":[…]}`，最多 50 条、按 `revisionNo` 倒序，**不含正文** |
 | `POST /api/admin/posts/{id}/preview-link` | 生成一次性预览链接 → `{"token":"…","url":"/preview/…","expiresAt":1760000000}`；**同一篇文章旧的未使用链接会被作废** |
-| `DELETE /api/admin/preview-links/{token}` | 立即作废该链接 → `{"deleted":true}`；不存在 → `404 / 1002` |
+| `DELETE /api/admin/preview-links/{token}` | 立即作废该链接 → `{"deleted":true}`；不存在 → `200 + code 1002` |
 
 ```json
 // POST /api/admin/posts/{id}/schedule  →  data（与 GET /posts/{id} 同形状）
@@ -393,7 +397,7 @@ PV 打点。请求体：
 ```
 
 库里只存 `token_hash`；公开端 `GET /api/preview/{token}` 首次访问写 `used_at` 并返回内容，
-之后或超过 24h → `410 / 2006`，token 不存在 → `404 / 1002`。
+之后或超过 24h → `200 + code 2006`，token 不存在 → `200 + code 1002`。
 
 隧道里（`http://localhost:8641`）点开 `/preview/…` 也能直接看：8641 边缘同样把 `/preview*`
 转给 Next，不必把域名换成公网站点。
@@ -404,7 +408,7 @@ PV 打点。请求体：
 | --- | --- |
 | `GET /api/admin/jobs?status=&page=&pageSize=` | 任务队列分页，按 `run_at` 倒序；`status` 空表示全部 |
 | `POST /api/admin/jobs` | 手动投递：`{"type":"cleanup"}`，只接受 `cleanup` / `backup` / `link_check`，立即入队 |
-| `POST /api/admin/jobs/{id}/retry` | 把 `failed` 任务放回 `pending` 并立刻到期；非 `failed` → `409 / 1004` |
+| `POST /api/admin/jobs/{id}/retry` | 把 `failed` 任务放回 `pending` 并立刻到期；非 `failed` → `200 + code 1004` |
 | `GET /api/admin/audit-logs?action=&targetType=&targetId=&page=&pageSize=` | 审计日志分页，按创建时间倒序；`adminId` / `ipHash` 只在这里出现 |
 
 ```json
@@ -436,8 +440,8 @@ PV 打点。请求体：
 { "list": [ { "id": 1, "name": "Go", "slug": "go", "description": "", "count": 3, "createdAt": 1760000000 } ] }
 ```
 
-冲突与校验：`slug` 重复 → `409 / 2001`；`slug` 非法或中文名留空 → `400 / 1003`（`data` 带 `field`）；
-`name` 重复 → `409 / 1004`。
+冲突与校验：`slug` 重复 → `200 + code 2001`；`slug` 非法或中文名留空 → `200 + code 1003`（`data` 带 `field`）；
+`name` 重复 → `200 + code 1004`。
 
 ### 跳转与附件
 
@@ -449,7 +453,7 @@ PV 打点。请求体：
 | `GET /api/admin/attachments?postId=&page=&pageSize=` | 附件分页，按 `sort`、`id` 升序 |
 | `POST /api/admin/attachments` | `{"postId":3,"title":"源码","shareUrl":"https://…","fileName":"src.zip","bytes":1024,"sha256":"","version":"v1","sort":0}` |
 | `PUT /api/admin/attachments/{id}` · `DELETE /api/admin/attachments/{id}` | 同上字段，均可选 |
-| `GET /api/attachments/{id}/go` | **公开**：`302` 跳 `share_url` 并 `clicks+1`；不存在 → `404 / 1002`；响应 `no-store` |
+| `GET /api/attachments/{id}/go` | **公开**：`302` 跳 `share_url` 并 `clicks+1`；不存在 → `200 + code 1002`；响应 `no-store` |
 
 ```json
 // GET /api/admin/attachments  →  data.list[]
@@ -459,7 +463,7 @@ PV 打点。请求体：
 ```
 
 `storageKey` 非空表示**本地上传**（物理文件 `{file.dir}/{storageKey}`），为空表示**外链**（按 `shareUrl` 302）。
-`POST /api/admin/attachments`（JSON）只用于外链，`shareUrl` 留空 → `400 / 1003`；本地文件走下面的上传端点。
+`POST /api/admin/attachments`（JSON）只用于外链，`shareUrl` 留空 → `200 + code 1003`；本地文件走下面的上传端点。
 
 ### 附件上传与下载
 
@@ -470,15 +474,15 @@ PV 打点。请求体：
 
 上传失败：
 
-| HTTP | code | 场景 |
-| --- | --- | --- |
-| 400 | 1003 | 缺 `file` / `postId` 非法 / `sort` 非法 / `title` 超长 |
-| 413 | 2008 | 超过 `file.max_bytes`（默认 20MB） |
-| 415 | 2007 | 扩展名或文件名命中安全黑名单（`php`/`jsp`/`exe`/`html`/`svg`/`js`… 与隐藏文件） |
+| code | 场景 |
+| --- | --- |
+| 1003 | 缺 `file` / `postId` 非法 / `sort` 非法 / `title` 超长 |
+| 2008 | 超过 `file.max_bytes`（默认 20MB） |
+| 2007 | 扩展名或文件名命中安全黑名单（`php`/`jsp`/`exe`/`html`/`svg`/`js`… 与隐藏文件） |
 
 本地下发的响应头固定为 `Content-Type: application/octet-stream`、
 `Content-Disposition: attachment; filename="…"; filename*=UTF-8''…`、`X-Content-Type-Options: nosniff`，
-并支持 `Range`（断点续传）；文件丢失 → `410 / 1007`，记录不存在 → `404 / 1002`。
+并支持 `Range`（断点续传）；文件丢失 → `200 + code 1007`，记录不存在 → `200 + code 1002`。
 
 ### 存储管理
 
@@ -524,7 +528,7 @@ PV 打点。请求体：
 }
 ```
 
-- `siteTimezone` 必须是 `time.LoadLocation` 认得的 IANA 名（如 `Asia/Shanghai`），否则 `400 / 1003`。
+- `siteTimezone` 必须是 `time.LoadLocation` 认得的 IANA 名（如 `Asia/Shanghai`），否则 `200 + code 1003`。
 - `imgBaseUrl` 留空表示用相对路径 `/uploads/…`（由 nginx 直出）；填了必须是 `http(s)://` 且不带结尾斜杠。
 - `visitor_salt` 属于内部密钥，**任何接口都不返回**（§9）。
 
@@ -534,8 +538,8 @@ PV 打点。请求体：
 | --- | --- |
 | `POST /api/admin/media` | `multipart/form-data`：`alt`（可选，必须排在 `file` 前）+ `file`；≤30MB、≤5000 万像素；内容 sha256 去重 |
 | `GET /api/admin/media` | 媒体库分页，按创建时间倒序 |
-| `DELETE /api/admin/media/{id}` | 未被引用才删除；被引用返回 `409 / 2002` 与引用清单 |
-| `POST /api/admin/media/{id}/retry` | 从本地原图重新生成变体；原图已被删（`origArchived`）时 `404 / 1002` |
+| `DELETE /api/admin/media/{id}` | 未被引用才删除；被引用返回 `200 + code 2002` 与引用清单 |
+| `POST /api/admin/media/{id}/retry` | 从本地原图重新生成变体；原图已被删（`origArchived`）时 `200 + code 1002` |
 | `DELETE /api/admin/media/{id}/original` | 只删原图、保留四档变体（见「存储管理」） |
 
 上传成功（`data`）：

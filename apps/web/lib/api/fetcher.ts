@@ -28,9 +28,13 @@ export class ApiError extends Error {
     this.details = params.details ?? null;
   }
 
-  /** 是否是"未登录 / 会话失效"。 */
+  /**
+   * 是否是"未登录 / 会话失效"。
+   *
+   * v1.14 起业务错误一律 HTTP 200，只按 code 判定；`status` 仅作诊断信息保留。
+   */
   get isUnauthorized(): boolean {
-    return this.status === 401 || this.code === 1000;
+    return this.code === 1000;
   }
 }
 
@@ -99,6 +103,7 @@ export async function apiFetch<T>(
   const envelope = parseEnvelope<T>(text);
 
   if (!envelope) {
+    // 非信封响应（nginx 502 HTML、上游宕机等）：只能用 HTTP 状态兜底。
     if (!response.ok) {
       throw new ApiError({
         code: 1006,
@@ -109,7 +114,9 @@ export async function apiFetch<T>(
     return undefined as T;
   }
 
-  if (!response.ok || envelope.code !== 0) {
+  // 业务成败只看信封里的 code：v1.14 起失败也是 HTTP 200，`!response.ok`
+  // 只兜住"信封 + 非 2xx"的意外组合（例如 NoRoute 的 404 + 1002）。
+  if (envelope.code !== 0 || !response.ok) {
     throw new ApiError({
       code: envelope.code,
       status: response.status,

@@ -40,7 +40,8 @@ return nil, errs.WithDetails(errs.ErrorRateLimited, "请求过于频繁", map[st
 return nil, fmt.Errorf("查询会话失败: %w", err)
 ```
 
-- `api` 层只调用 `response.FailWithError(c, err)`；HTTP 状态由 `errs.HTTPStatus(code)` 查表。
+- `api` 层只调用 `response.FailWithError(c, err)`；业务失败一律 HTTP 200，状态语义由信封 `code` 表达
+  （v1.14 起 `errs.HTTPStatus(code)` 不再决定状态码，只服务于健康检查等非业务场景）。
 - 绝不把 `err.Error()` 直接返回前端，也不在前端可见的 `msg` 里出现库名、文件名、堆栈。
 - 校验失败：`response.FailWithDetailed(c, errs.ErrorValidation, request.ValidationDetails(err), "参数校验失败")`。
 

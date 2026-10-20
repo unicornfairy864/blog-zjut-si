@@ -193,7 +193,7 @@ export function PostPublishing({
 
   /**
    * 为线上内容记一个新版本：复用 publish——服务端只在内容与最新版本不同时才写快照，
-   * 内容没变会返回 409/1004（那正是"重复发布"的定义）。
+   * 内容没变会返回 code 1004（那正是"重复发布"的定义）。
    */
   async function handleSnapshot() {
     if (!post) {
@@ -346,7 +346,7 @@ export function PostPublishing({
           </CardDescription>
           {post.status === "published" ? (
             <div className="pt-2">
-              {/* 线上改完字要点这里：服务端只在内容与最新版本不同时才记账，重复点会 409。 */}
+              {/* 线上改完字要点这里：服务端只在内容与最新版本不同时才记账，重复点会 code 1004。 */}
               <Button
                 type="button"
                 size="sm"

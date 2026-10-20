@@ -10,7 +10,7 @@ import { Button } from "@/ui/shadcn/button";
 import { Loading } from "@/ui/shared/loading";
 
 /**
- * 受保护的管理页外壳：先 GET /auth/me，401 直接跳 /admin/login。
+ * 受保护的管理页外壳：先 GET /auth/me，code 1000（未登录）直接跳 /admin/login。
  *
  * 在会话确认前只渲染加载态，避免先闪一下内容再跳走（agent.md §8）。
  */
@@ -36,7 +36,7 @@ export default function ProtectedAdminLayout({
     );
   }
 
-  // 网络/5xx 等非 401 失败：给一次重试，不要无限转圈。
+  // 网络/非信封失败等非 code 1000 的失败：给一次重试，不要无限转圈。
   if (!isLoading && !admin && error) {
     return (
       <main className="container max-w-md space-y-4 py-16">

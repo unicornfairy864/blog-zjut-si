@@ -164,7 +164,7 @@ func (AttachmentApi) Delete(c *gin.Context) {
 	response.OkWithData(c, gin.H{"deleted": true})
 }
 
-// bindAttachment 绑定附件请求体；绑定失败即写出 400/1003。
+// bindAttachment 绑定附件请求体；绑定失败即写出 code 1003（HTTP 200）。
 func bindAttachment(c *gin.Context) (service.AttachmentInput, bool) {
 	var req attachmentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

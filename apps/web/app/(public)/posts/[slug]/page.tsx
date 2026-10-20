@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 
-import { isApiError, publicApi, type PublicPostDetail } from "@/lib/api/public";
+import { isApiCode, publicApi, type PublicPostDetail } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
 import { formatDate } from "@/lib/utils";
 import { CommentSection } from "@/ui/post/comment-section";
@@ -22,14 +22,14 @@ interface PostDetailPageProps {
 /**
  * 取文章详情；同一请求内 `generateMetadata` 与页面共用一次取数。
  *
- * 归档 / 已删除（410）与不存在（404）都走 `notFound()`：410 的正常路径由
- * `middleware.ts` 提前拦截并返回真正的 410。
+ * 归档 / 已删除（code 1007）与不存在（code 1002）都走 `notFound()`：1007 的
+ * 正常路径由 `middleware.ts` 提前拦截并返回真正的 410 页面。
  */
 const loadPost = cache(async (slug: string): Promise<PublicPostDetail> => {
   try {
     return await publicApi.post(slug);
   } catch (error) {
-    if (isApiError(error, 404) || isApiError(error, 410)) {
+    if (isApiCode(error, 1002) || isApiCode(error, 1007)) {
       notFound();
     }
     throw error;
