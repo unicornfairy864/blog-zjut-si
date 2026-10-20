@@ -31,8 +31,10 @@ cp .env.example .env
 vi .env      # 填 BLOG_ADMIN_USERNAME / BLOG_ADMIN_PASSWORD（≥16 位）
 
 # 4) 数据目录（bind mount，见 compose.yaml）
-#    容器里 blogd 以 node(uid 1000) 运行，属主必须是 1000，否则 SQLite 无法建库。
-sudo mkdir -p /data/blog/db /data/blog/uploads /data/blog/files
+#    容器里 blogd 以 node(uid 1000) 运行，属主必须是 1000，否则 SQLite 无法建库、
+#    启动时会直接报「创建上传目录失败 / 创建附件目录失败」。
+#    backup 目录必须与 uploads/files 在同一个文件系统上（备份用硬链接）。
+sudo mkdir -p /data/blog/db /data/blog/uploads /data/blog/files /data/blog/backup
 sudo chown -R 1000:1000 /data/blog
 
 # 5) 让宿主 nginx 能读图片（附件不直出，不需要这一步）；详见 §11.1
@@ -146,7 +148,9 @@ docker compose start blog
 | `BLOG_AUTH_COOKIE_SECURE` | `false` | 隧道走 http，保持 false |
 | `BLOG_LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 | `BLOG_TASK_ENABLED` | `true` | 调度器开关 |
-| `BLOG_BACKUP_DIR` | `./data/backup` | `backup` 任务的落点：`blog-YYYYMMDD.db` + `uploads-YYYYMMDD/` + `files-YYYYMMDD/` |
+| `BLOG_UPLOAD_DIR` | `./data/uploads` | 图片目录（原图 + 四档变体）；容器里 compose 覆盖为 `/data/blog/uploads` |
+| `BLOG_FILE_DIR` | `./data/files` | 附件目录；容器里 compose 覆盖为 `/data/blog/files` |
+| `BLOG_BACKUP_DIR` | `./data/backup` | `backup` 任务的落点：`blog-YYYYMMDD.db` + `uploads-YYYYMMDD/` + `files-YYYYMMDD/`；容器里 compose 覆盖为 `/data/blog/backup`，必须与 uploads/files 同一个文件系统 |
 | `BLOG_CONFIG` | 空 | 显式指定配置文件 |
 | `BLOG_MIGRATE_ONLY` | 空 | 设为 `1` 时只迁移后退出 |
 | `BLOG_ADMIN_USERNAME` / `BLOG_ADMIN_PASSWORD` | 空 | 首次引导创建管理员 |
@@ -162,6 +166,8 @@ docker compose start blog
 | 写操作 403，`msg` 为 CSRF 校验失败 | 刷新页面重新 `GET /auth/me` 取 token；确认没有用 `127.0.0.1` 与 `localhost` 混访 |
 | 一直跳回登录页 | cookie 被浏览器拦截（无痕/第三方策略）、host 不一致、或系统时间偏差超过 7 天 |
 | 容器反复重启 | 看 `dirty` 是否非空、端口是否被占用、`/data` 权限是否可写 |
+| 容器启动即退出，日志 `加载配置失败` + `创建上传/附件目录失败: mkdir ./data: permission denied` | 数据目录没建或属主不是 1000：`sudo mkdir -p /data/blog/{db,uploads,files,backup} && sudo chown -R 1000:1000 /data/blog`；确认 compose 的 `BLOG_*_DIR` 都是 `/data/blog/...` 绝对路径 |
+| 容器起来了但 `backup` 任务失败，日志 `创建备份目录失败` | 备份目录只在任务执行时创建，不影响启动：`sudo mkdir -p /data/blog/backup && sudo chown 1000:1000 /data/blog/backup` |
 | `readyz` 503 | 看 `checks` 数组里哪一项 false：磁盘满 / uploads 不可写 / 队列积压 |
 
 ## 9. 发布与回滚
@@ -196,7 +202,7 @@ sudo certbot renew --dry-run                # 每月演练
 ### 11.1 目录与权限（部署时做一次）
 
 ```bash
-sudo mkdir -p /data/blog/db /data/blog/uploads /data/blog/files
+sudo mkdir -p /data/blog/db /data/blog/uploads /data/blog/files /data/blog/backup
 
 # 容器以 uid 1000 写文件（目录 0750、文件 0640），nginx 默认用户 www-data 读不到
 sudo setfacl -R  -m u:www-data:rX /data/blog/uploads
@@ -280,6 +286,8 @@ $BLOG_BACKUP_DIR/files-YYYYMMDD/       # 附件硬链接快照，保留 90 天
 ```
 
 硬链接要求备份目录与数据目录在**同一个文件系统**上，否则会自动退回复制（慢且占空间）。
+所以 `BLOG_BACKUP_DIR` 必须留在 `/data/blog` 下（compose 默认 `/data/blog/backup`，是独立 bind mount）。
+目录建不出来只影响备份任务本身，不会拦住站点启动；任务日志里有具体原因。
 恢复演练见 §16。
 
 ---

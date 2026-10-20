@@ -63,12 +63,18 @@ ENV NODE_ENV=production \
     HOSTNAME=127.0.0.1 \
     BLOG_CONFIG=/etc/blog/config.yaml \
     BLOG_DB_PATH=/data/blog/db/blog.db \
-    BLOG_UPLOAD_DIR=/data/blog/uploads
+    BLOG_UPLOAD_DIR=/data/blog/uploads \
+    BLOG_FILE_DIR=/data/blog/files \
+    BLOG_BACKUP_DIR=/data/blog/backup
 
-RUN mkdir -p /data/blog/db /data/blog/uploads && chown -R node:node /data/blog
+# 三个数据目录都必须存在且属于 node（uid 1000）：config 加载时会尝试创建它们，
+# 落在 root 属主的目录上会直接拒绝启动。compose 的 bind mount 会盖住这些路径，
+# 宿主侧同样要 mkdir + chown（docs/runbook.md §11.1）。
+RUN mkdir -p /data/blog/db /data/blog/uploads /data/blog/files /data/blog/backup \
+    && chown -R node:node /data/blog
 
 EXPOSE 8640 8641
-VOLUME ["/data/blog/db", "/data/blog/uploads"]
+VOLUME ["/data/blog/db", "/data/blog/uploads", "/data/blog/files", "/data/blog/backup"]
 
 # 健康检查只打 8641，8640 不暴露任何状态（agent.md §2 / §14）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \

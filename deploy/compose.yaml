@@ -20,10 +20,13 @@ services:
       BLOG_SERVER_PUBLIC: ":8640"
       BLOG_SERVER_ADMIN: ":8641"
       BLOG_WEB_UPSTREAM: "http://127.0.0.1:3000"
-      BLOG_DB_PATH: "/data/blog/db/blog.db"
-      BLOG_UPLOAD_DIR: "/data/blog/uploads"
+      BLOG_DB_PATH: "${BLOG_DB_PATH:-/data/blog/db/blog.db}"
+      # 三个数据目录都必须在 bind mount 里，且宿主目录要属于 uid 1000（runbook §11.1）。
+      BLOG_UPLOAD_DIR: "${BLOG_UPLOAD_DIR:-/data/blog/uploads}"
       # 附件目录：只经 /api/attachments/{id}/go 下发，不做静态直出。
-      BLOG_FILE_DIR: "/data/blog/files"
+      BLOG_FILE_DIR: "${BLOG_FILE_DIR:-/data/blog/files}"
+      # 备份落点必须与 uploads/files 在同一个文件系统上，硬链接才成立。
+      BLOG_BACKUP_DIR: "${BLOG_BACKUP_DIR:-/data/blog/backup}"
       BLOG_FILE_MAX_BYTES: "${BLOG_FILE_MAX_BYTES:-20971520}"
       BLOG_LOG_LEVEL: "${BLOG_LOG_LEVEL:-info}"
       # 首次启动且 admins 表为空时创建账号；建好后可从此处删除。
@@ -33,6 +36,7 @@ services:
       - /data/blog/db:/data/blog/db
       - /data/blog/uploads:/data/blog/uploads
       - /data/blog/files:/data/blog/files
+      - /data/blog/backup:/data/blog/backup
     logging:
       driver: json-file
       options:

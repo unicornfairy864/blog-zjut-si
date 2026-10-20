@@ -223,9 +223,9 @@ func (c *Config) normalize() error {
 		}
 	}
 	if c.Backup.Dir != "" {
-		if err := os.MkdirAll(c.Backup.Dir, 0o750); err != nil {
-			return fmt.Errorf("创建备份目录失败: %w", err)
-		}
+		// 只有 backup 任务用得到这个目录，建不出来不该拦住站点启动：
+		// 任务真正执行时会再 MkdirAll 一次，失败只影响那一次备份（日志里有原因）。
+		_ = os.MkdirAll(c.Backup.Dir, 0o750)
 	}
 	if c.DB.Path != "" {
 		dir := filepath.Dir(c.DB.Path)
