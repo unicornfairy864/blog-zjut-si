@@ -18,15 +18,15 @@ import (
 
 // Config 是进程的全部配置。
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Web       WebConfig       `mapstructure:"web"`
-	DB        DBConfig        `mapstructure:"db"`
-	Log       LogConfig       `mapstructure:"log"`
-	Auth      AuthConfig      `mapstructure:"auth"`
-	Upload    UploadConfig    `mapstructure:"upload"`
-	Task      TaskConfig      `mapstructure:"task"`
-	Backup    BackupConfig    `mapstructure:"backup"`
-	Cloudreve CloudreveConfig `mapstructure:"cloudreve"`
+	Server ServerConfig `mapstructure:"server"`
+	Web    WebConfig    `mapstructure:"web"`
+	DB     DBConfig     `mapstructure:"db"`
+	Log    LogConfig    `mapstructure:"log"`
+	Auth   AuthConfig   `mapstructure:"auth"`
+	Upload UploadConfig `mapstructure:"upload"`
+	File   FileConfig   `mapstructure:"file"`
+	Task   TaskConfig   `mapstructure:"task"`
+	Backup BackupConfig `mapstructure:"backup"`
 }
 
 // ServerConfig 描述两条 listener 的监听与超时参数。
@@ -69,8 +69,17 @@ type AuthConfig struct {
 	LockMinutes       int    `mapstructure:"lock_minutes"`
 }
 
-// UploadConfig 描述上传目录与大小上限。
+// UploadConfig 描述图片目录与大小上限。
 type UploadConfig struct {
+	Dir      string `mapstructure:"dir"`
+	MaxBytes int64  `mapstructure:"max_bytes"`
+}
+
+// FileConfig 描述附件目录与大小上限（agent.md §10：附件与图片分开存）。
+//
+// 附件按 sha256 去重后平铺成 {dir}/{sha[:2]}/{sha256}{ext}，不生成变体，
+// 公开端一律经 GET /api/attachments/{id}/go 出口，目录本身不对外直出。
+type FileConfig struct {
 	Dir      string `mapstructure:"dir"`
 	MaxBytes int64  `mapstructure:"max_bytes"`
 }
@@ -81,34 +90,9 @@ type TaskConfig struct {
 	IntervalSeconds int  `mapstructure:"interval_seconds"`
 }
 
-// BackupConfig 描述备份落点（agent.md §14：库保留 30 天、图片 90 天）。
+// BackupConfig 描述备份落点（agent.md §14：库保留 30 天、图片与附件 90 天）。
 type BackupConfig struct {
 	Dir string `mapstructure:"dir"`
-}
-
-// CloudreveConfig 描述原图与变体归档的 WebDAV 目标（§10）。
-//
-// 口令只走环境变量 BLOG_CLOUDREVE_PASSWORD，不写入 config.yaml。
-type CloudreveConfig struct {
-	Enabled        bool   `mapstructure:"enabled"`
-	WebDAVURL      string `mapstructure:"webdav_url"`
-	Username       string `mapstructure:"username"`
-	Password       string `mapstructure:"password"`
-	BasePath       string `mapstructure:"base_path"`
-	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
-	// PublicBaseURL 是图床的匿名直出前缀（如 https://pan.example.com/public/blog）。
-	// 为空表示不产出原图直链，正文里的图片也就不会被包上「查看原图」链接。
-	PublicBaseURL string `mapstructure:"public_base_url"`
-	// ArchiveVariants 决定四档 WebP 变体是否也推上图床（默认 true）。
-	ArchiveVariants bool `mapstructure:"archive_variants"`
-}
-
-// Timeout 返回 WebDAV 请求超时。
-func (c CloudreveConfig) Timeout() time.Duration {
-	if c.TimeoutSeconds <= 0 {
-		return 30 * time.Second
-	}
-	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
 // ReadHeaderTimeout 返回读请求头的超时。
@@ -207,19 +191,13 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("upload.dir", "./data/uploads")
 	v.SetDefault("upload.max_bytes", int64(30*1024*1024))
 
+	v.SetDefault("file.dir", "./data/files")
+	v.SetDefault("file.max_bytes", int64(20*1024*1024))
+
 	v.SetDefault("task.enabled", true)
 	v.SetDefault("task.interval_seconds", 60)
 
 	v.SetDefault("backup.dir", "./data/backup")
-
-	v.SetDefault("cloudreve.enabled", false)
-	v.SetDefault("cloudreve.webdav_url", "")
-	v.SetDefault("cloudreve.username", "")
-	v.SetDefault("cloudreve.password", "")
-	v.SetDefault("cloudreve.base_path", "/blog")
-	v.SetDefault("cloudreve.public_base_url", "")
-	v.SetDefault("cloudreve.archive_variants", true)
-	v.SetDefault("cloudreve.timeout_seconds", 30)
 }
 
 // normalize 做无损归一化：去空白、创建目录。
@@ -231,22 +209,17 @@ func (c *Config) normalize() error {
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Auth.CookieName = strings.TrimSpace(c.Auth.CookieName)
 	c.Upload.Dir = strings.TrimSpace(c.Upload.Dir)
+	c.File.Dir = strings.TrimSpace(c.File.Dir)
 	c.Backup.Dir = strings.TrimSpace(c.Backup.Dir)
-	c.Cloudreve.WebDAVURL = strings.TrimRight(strings.TrimSpace(c.Cloudreve.WebDAVURL), "/")
-	c.Cloudreve.Username = strings.TrimSpace(c.Cloudreve.Username)
-	c.Cloudreve.BasePath = strings.TrimSpace(c.Cloudreve.BasePath)
-	if c.Cloudreve.BasePath == "" {
-		c.Cloudreve.BasePath = "/blog"
-	}
-	if !strings.HasPrefix(c.Cloudreve.BasePath, "/") {
-		c.Cloudreve.BasePath = "/" + c.Cloudreve.BasePath
-	}
-	c.Cloudreve.BasePath = strings.TrimRight(c.Cloudreve.BasePath, "/")
-	c.Cloudreve.PublicBaseURL = strings.TrimRight(strings.TrimSpace(c.Cloudreve.PublicBaseURL), "/")
 
 	if c.Upload.Dir != "" {
 		if err := os.MkdirAll(c.Upload.Dir, 0o750); err != nil {
 			return fmt.Errorf("创建上传目录失败: %w", err)
+		}
+	}
+	if c.File.Dir != "" {
+		if err := os.MkdirAll(c.File.Dir, 0o750); err != nil {
+			return fmt.Errorf("创建附件目录失败: %w", err)
 		}
 	}
 	if c.Backup.Dir != "" {
@@ -311,23 +284,17 @@ func (c Config) Validate() error {
 	if c.Upload.MaxBytes < 1024 {
 		problems = append(problems, "upload.max_bytes 必须 ≥1024")
 	}
+	if c.File.Dir == "" {
+		problems = append(problems, "file.dir 不能为空")
+	}
+	if c.File.MaxBytes < 1024 || c.File.MaxBytes > 512*1024*1024 {
+		problems = append(problems, "file.max_bytes 必须在 1KB–512MB 之间")
+	}
+	if c.File.Dir != "" && c.Upload.Dir != "" && c.File.Dir == c.Upload.Dir {
+		problems = append(problems, "file.dir 不能与 upload.dir 相同")
+	}
 	if c.Task.IntervalSeconds < 10 {
 		problems = append(problems, "task.interval_seconds 必须 ≥10")
-	}
-	if c.Cloudreve.Enabled {
-		if c.Cloudreve.WebDAVURL == "" {
-			problems = append(problems, "cloudreve.webdav_url 在启用归档时不能为空")
-		}
-		if c.Cloudreve.Username == "" {
-			problems = append(problems, "cloudreve.username 在启用归档时不能为空")
-		}
-	}
-	if c.Cloudreve.TimeoutSeconds < 5 || c.Cloudreve.TimeoutSeconds > 300 {
-		problems = append(problems, "cloudreve.timeout_seconds 必须在 5–300 之间")
-	}
-	if base := c.Cloudreve.PublicBaseURL; base != "" &&
-		!strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
-		problems = append(problems, "cloudreve.public_base_url 必须以 http:// 或 https:// 开头")
 	}
 
 	if len(problems) > 0 {

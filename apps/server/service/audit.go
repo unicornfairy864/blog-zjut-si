@@ -48,15 +48,17 @@ const (
 	AuditActionAttachmentCreate = "attachment.create"
 	AuditActionAttachmentUpdate = "attachment.update"
 	AuditActionAttachmentDelete = "attachment.delete"
+	AuditActionAttachmentUpload = "attachment.upload"
 
 	AuditActionSettingsUpdate = "settings.update"
 	AuditActionJobEnqueue     = "job.enqueue"
 	AuditActionJobRetry       = "job.retry"
 
-	AuditActionMediaUpload  = "media.upload"
-	AuditActionMediaDelete  = "media.delete"
-	AuditActionMediaRetry   = "media.retry"
-	AuditActionMediaArchive = "media.archive"
+	AuditActionMediaUpload         = "media.upload"
+	AuditActionMediaDelete         = "media.delete"
+	AuditActionMediaRetry          = "media.retry"
+	AuditActionMediaOriginalDelete = "media.original_delete"
+	AuditActionStorageCleanup      = "storage.cleanup"
 
 	AuditActionCommentApprove = "comment.approve"
 	AuditActionCommentSpam    = "comment.spam"

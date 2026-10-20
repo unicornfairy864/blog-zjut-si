@@ -5,6 +5,9 @@ export const swrKeys = {
   /** 文章列表；status 为空表示全部。 */
   adminPosts: (status: string, page: number, pageSize: number) =>
     `/api/admin/posts?status=${status}&page=${page}&pageSize=${pageSize}`,
+  /** 文章选择器（附件上传用）：按关键字取第一页，关键字要转义后拼进 key。 */
+  adminPostOptions: (keyword: string, pageSize: number) =>
+    `/api/admin/posts?status=&page=1&pageSize=${pageSize}&keyword=${encodeURIComponent(keyword)}`,
   /** 文章详情。 */
   adminPost: (id: number) => `/api/admin/posts/${id}`,
   /** 媒体库列表。 */
@@ -30,6 +33,8 @@ export const swrKeys = {
   adminRedirects: "/api/admin/redirects",
   /** 站点设置（可写项 + 只读回显）。 */
   adminSettings: "/api/admin/settings",
+  /** 存储对账（占用统计 + 孤儿/缺失文件清单）。 */
+  adminStorage: "/api/admin/storage",
   /** 附件分页；postId 为空表示全部。 */
   adminAttachments: (postId: string, page: number, pageSize: number) =>
     `/api/admin/attachments?postId=${postId}&page=${page}&pageSize=${pageSize}`,

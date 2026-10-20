@@ -47,11 +47,12 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.POST("/posts/:id/preview-link", v1.ApiGroupApp.Admin.Post.PreviewLink)
 			authorized.DELETE("/preview-links/:token", v1.ApiGroupApp.Admin.Post.DeletePreviewLink)
 
-			// 媒体（D7）：上传、媒体库、删除与重试。
+			// 媒体（D7）：上传、媒体库、删除、重试与"删原图保变体"（§10）。
 			authorized.GET("/media", v1.ApiGroupApp.Admin.Media.List)
 			authorized.POST("/media", v1.ApiGroupApp.Admin.Media.Upload)
 			authorized.DELETE("/media/:id", v1.ApiGroupApp.Admin.Media.Delete)
 			authorized.POST("/media/:id/retry", v1.ApiGroupApp.Admin.Media.Retry)
+			authorized.DELETE("/media/:id/original", v1.ApiGroupApp.Admin.Media.RemoveOriginal)
 
 			// 评论审核（D11）：列表、单条与批量；写操作在 authorized 组内自带 CSRF（§5）。
 			authorized.GET("/comments", v1.ApiGroupApp.Admin.Comment.List)
@@ -80,13 +81,18 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.PUT("/redirects/:id", v1.ApiGroupApp.Admin.Content.UpdateRedirect)
 			authorized.DELETE("/redirects/:id", v1.ApiGroupApp.Admin.Content.DeleteRedirect)
 
-			// 附件与设置（D14）。
+			// 附件与设置（D14 / D15 本地附件）：外链登记、本地上传、设置回显与更新。
 			authorized.GET("/attachments", v1.ApiGroupApp.Admin.Attachment.List)
 			authorized.POST("/attachments", v1.ApiGroupApp.Admin.Attachment.Create)
+			authorized.POST("/attachments/upload", v1.ApiGroupApp.Admin.Attachment.Upload)
 			authorized.PUT("/attachments/:id", v1.ApiGroupApp.Admin.Attachment.Update)
 			authorized.DELETE("/attachments/:id", v1.ApiGroupApp.Admin.Attachment.Delete)
 			authorized.GET("/settings", v1.ApiGroupApp.Admin.Setting.Detail)
 			authorized.PUT("/settings", v1.ApiGroupApp.Admin.Setting.Update)
+
+			// 存储管理（§10）：磁盘占用对账、孤儿文件清理。
+			authorized.GET("/storage", v1.ApiGroupApp.Admin.Storage.Overview)
+			authorized.POST("/storage/cleanup", v1.ApiGroupApp.Admin.Storage.Cleanup)
 
 			// 任务与审计（D13/D14）：队列查看、手动投递、重试与审计查询。
 			authorized.GET("/jobs", v1.ApiGroupApp.Admin.Job.List)

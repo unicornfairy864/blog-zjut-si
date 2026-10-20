@@ -18,7 +18,6 @@ const (
 const (
 	JobTypePublishScheduled = "publish_scheduled"
 	JobTypeMediaProcess     = "media_process"
-	JobTypeMediaArchive     = "media_archive"
 	JobTypeLinkCheck        = "link_check"
 	JobTypeBackup           = "backup"
 	JobTypeCleanup          = "cleanup"

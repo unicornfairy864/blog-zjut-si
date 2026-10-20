@@ -258,14 +258,16 @@ func ListAuditLogs(db *gorm.DB, f AuditLogFilter) ([]AuditLog, int64, error) {
 }
 
 // CleanupResult 是一次 cleanup 的统计（写日志与自测断言用）。
+//
+// 不含原图/附件：它们不再自动清理，只在管理端存储管理里手动删（§10）。
 type CleanupResult struct {
-	Posts        int64 `json:"posts"`
-	PageViews    int64 `json:"pageViews"`
-	Revisions    int64 `json:"revisions"`
-	Sessions     int64 `json:"sessions"`
-	PreviewLinks int64 `json:"previewLinks"`
-	LoginAttempt int64 `json:"loginAttempts"`
-	Originals    int64 `json:"originals"`
+	Posts           int64 `json:"posts"`
+	PageViews       int64 `json:"pageViews"`
+	Revisions       int64 `json:"revisions"`
+	Sessions        int64 `json:"sessions"`
+	PreviewLinks    int64 `json:"previewLinks"`
+	LoginAttempt    int64 `json:"loginAttempts"`
+	AttachmentFiles int   `json:"attachmentFiles"`
 }
 
 // PurgeDeletedPosts 物理删除回收站里 deleted_at <= before 的文章及其从属行（§13）。
@@ -315,6 +317,22 @@ func PurgeDeletedPosts(db *gorm.DB, before dbtime.Unix) (int64, error) {
 	return int64(len(ids)), nil
 }
 
+// ListAttachmentKeysOfDeletedPostsBefore 返回回收站里待物理删除文章的附件 storage_key。
+//
+// 文件本体归 service 管，所以这里只把 key 交出去；purge 之后由调用方删掉没人再引用的文件。
+func ListAttachmentKeysOfDeletedPostsBefore(db *gorm.DB, before dbtime.Unix) ([]string, error) {
+	keys := make([]string, 0)
+	err := db.Model(&PostAttachment{}).
+		Joins("JOIN posts ON posts.id = post_attachments.post_id").
+		Where("posts.deleted_at IS NOT NULL AND posts.deleted_at <= ? AND post_attachments.storage_key <> ''",
+			int64(before)).
+		Distinct().Pluck("post_attachments.storage_key", &keys).Error
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 // DeletePageViewsBefore 删除 before 之前的访问明细（§13：保留 90 天）。
 func DeletePageViewsBefore(db *gorm.DB, before dbtime.Unix) (int64, error) {
 	result := db.Where("created_at < ?", int64(before)).Delete(&PageView{})
@@ -342,12 +360,10 @@ func ListPostsWithManyRevisions(db *gorm.DB, keep int) ([]int64, error) {
 	return ids, nil
 }
 
-// ListArchivedOriginalsBefore 返回归档完成时间早于 before 的媒体（本地原图可删）。
-func ListArchivedOriginalsBefore(db *gorm.DB, before dbtime.Unix) ([]Media, error) {
+// ListAllMedia 返回全部媒体（存储管理对账用；本站图片量级很小，一次取回即可）。
+func ListAllMedia(db *gorm.DB) ([]Media, error) {
 	items := make([]Media, 0)
-	err := db.Where("orig_archived = 1 AND orig_archived_at IS NOT NULL AND orig_archived_at <= ?", int64(before)).
-		Find(&items).Error
-	if err != nil {
+	if err := db.Order("id ASC").Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil

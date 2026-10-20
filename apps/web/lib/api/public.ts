@@ -13,7 +13,7 @@ export interface PingResult {
   time: number;
 }
 
-/** 公开图片信息；url / variants / origUrl 都由服务端按 img_base_url 与图床配置拼好。 */
+/** 公开图片信息；url / variants / origUrl 都由服务端按 img_base_url 与本地上传目录拼好。 */
 export interface PublicMedia {
   sha256: string;
   ext: string;

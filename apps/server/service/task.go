@@ -29,11 +29,9 @@ const (
 	postTrashRetention = 30 * 24 * time.Hour
 	// pageViewRetention 是访问明细保留期：90 天。
 	pageViewRetention = 90 * 24 * time.Hour
-	// originalRetention 是本地原图在归档完成后的保留期：30 天。
-	originalRetention = 30 * 24 * time.Hour
 	// loginAttemptRetention 是登录失败计数的清理门槛。
 	loginAttemptRetention = 24 * time.Hour
-	// backupDBRetention / backupUploadsRetention 是备份保留期（§14：库 30 天、图片 90 天）。
+	// backupDBRetention / backupUploadsRetention 是备份保留期（§14：库 30 天、图片与附件 90 天）。
 	backupDBRetention      = 30 * 24 * time.Hour
 	backupUploadsRetention = 90 * 24 * time.Hour
 	// linkCheckMaxURLs / linkCheckPerPost 限制单次巡检的外链数量，避免长时间占住调度器。
@@ -65,11 +63,18 @@ func (s TaskService) HandleCleanup(_ context.Context, _ *model.Job) error {
 	now := dbtime.Now()
 	result := model.CleanupResult{}
 
+	// 先记下待物理删除文章的附件文件，purge 之后再删掉没人引用的那部分。
+	attachmentKeys, err := model.ListAttachmentKeysOfDeletedPostsBefore(global.DB, now.Add(-postTrashRetention))
+	if err != nil {
+		return fmt.Errorf("查询待清理附件失败: %w", err)
+	}
+
 	posts, err := model.PurgeDeletedPosts(global.DB, now.Add(-postTrashRetention))
 	if err != nil {
 		return fmt.Errorf("清理回收站失败: %w", err)
 	}
 	result.Posts = posts
+	result.AttachmentFiles = ServiceGroupApp.Content.PurgeUnreferencedAttachmentFiles(attachmentKeys)
 
 	views, err := model.DeletePageViewsBefore(global.DB, now.Add(-pageViewRetention))
 	if err != nil {
@@ -107,22 +112,20 @@ func (s TaskService) HandleCleanup(_ context.Context, _ *model.Job) error {
 	}
 	result.LoginAttempt = attempts
 
-	originals, err := ServiceGroupApp.Media.PurgeArchivedOriginals(now.Add(-originalRetention))
-	if err != nil {
-		return fmt.Errorf("清理本地原图失败: %w", err)
-	}
-	result.Originals = originals
+	// 本地原图与附件一律不自动清理（§10）：它们是唯一副本，只在管理端手动删。
+	// 想回收空间用 /admin 的存储管理（删原图保变体、清孤儿文件）。
 
 	global.Log.Info("清理完成",
 		"posts", result.Posts, "page_views", result.PageViews, "revisions", result.Revisions,
 		"sessions", result.Sessions, "preview_links", result.PreviewLinks,
-		"login_attempts", result.LoginAttempt, "originals", result.Originals)
+		"login_attempts", result.LoginAttempt, "attachment_files", result.AttachmentFiles)
 	return nil
 }
 
-// HandleBackup 备份数据库与图片（§14）：`VACUUM INTO` + uploads 硬链接快照。
+// HandleBackup 备份数据库、图片与附件（§14）：`VACUUM INTO` + 两个目录的硬链接快照。
 //
 // 用硬链接而不是复制：同一文件系统上零拷贝，且上传目录里的文件写完就不再改（C10）。
+// 原图与附件都是唯一副本，所以快照必须覆盖 uploads 与 files 两个目录。
 func (s TaskService) HandleBackup(_ context.Context, _ *model.Job) error {
 	dir := global.Config.Backup.Dir
 	if dir == "" {
@@ -147,10 +150,13 @@ func (s TaskService) HandleBackup(_ context.Context, _ *model.Job) error {
 		return fmt.Errorf("备份数据库失败: %w", err)
 	}
 
-	snapshot := filepath.Join(dir, "uploads-"+stamp)
-	files, err := snapshotUploads(global.Config.Upload.Dir, snapshot)
+	uploads, err := snapshotDir(global.Config.Upload.Dir, filepath.Join(dir, "uploads-"+stamp))
 	if err != nil {
-		return fmt.Errorf("备份上传目录失败: %w", err)
+		return fmt.Errorf("备份图片目录失败: %w", err)
+	}
+	files, err := snapshotDir(global.Config.File.Dir, filepath.Join(dir, "files-"+stamp))
+	if err != nil {
+		return fmt.Errorf("备份附件目录失败: %w", err)
 	}
 
 	removedDB, err := pruneBackups(dir, "blog-", ".db", backupDBRetention)
@@ -161,9 +167,13 @@ func (s TaskService) HandleBackup(_ context.Context, _ *model.Job) error {
 	if err != nil {
 		return err
 	}
+	removedFiles, err := pruneBackups(dir, "files-", "", backupUploadsRetention)
+	if err != nil {
+		return err
+	}
 
-	global.Log.Info("备份完成", "db", dbPath, "uploads_files", files,
-		"pruned_db", removedDB, "pruned_uploads", removedUploads)
+	global.Log.Info("备份完成", "db", dbPath, "uploads_files", uploads, "files_files", files,
+		"pruned_db", removedDB, "pruned_uploads", removedUploads, "pruned_files", removedFiles)
 	return nil
 }
 
@@ -297,8 +307,8 @@ func doRequest(ctx context.Context, client *http.Client, method, url string) (in
 	return response.StatusCode, nil
 }
 
-// snapshotUploads 把上传目录硬链接到快照目录；跨文件系统时退回复制。
-func snapshotUploads(source, target string) (int, error) {
+// snapshotDir 把目录硬链接到快照目录；跨文件系统时退回复制。
+func snapshotDir(source, target string) (int, error) {
 	if _, err := os.Stat(source); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil

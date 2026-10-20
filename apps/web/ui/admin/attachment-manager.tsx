@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
@@ -13,14 +13,19 @@ import {
   type AdminAttachment,
   type AdminAttachmentListResult,
   type AttachmentCreateInput,
+  type AttachmentUploadInput,
 } from "@/lib/api/ops";
+import { adminPostApi, type PostListResult } from "@/lib/api/posts";
 import { swrKeys } from "@/lib/swr/keys";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import {
   attachmentFormSchema,
+  attachmentLocalFormSchema,
   type AttachmentFormValues,
 } from "@/lib/zod/attachment";
+import { FieldSelect } from "@/ui/admin/field-select";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
+import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
 import { Input } from "@/ui/shadcn/input";
 import { Label } from "@/ui/shadcn/label";
@@ -29,6 +34,9 @@ import { Pagination } from "@/ui/shared/pagination";
 
 /** 每页条数；服务端上限 50（agent.md §5）。 */
 const PAGE_SIZE = 20;
+
+/** 文章选择器一次拉多少篇；服务端单页上限 50。 */
+const POST_OPTION_PAGE_SIZE = 50;
 
 /** 空表单；sort 默认 0，因为服务端按 sort、id 升序排，留空会把新附件插到列表中间。 */
 const EMPTY_FORM: AttachmentFormValues = {
@@ -115,12 +123,18 @@ interface AttachmentFormProps {
   /** 正在编辑的附件；null 表示新建。 */
   editing: AdminAttachment | null;
   busy: boolean;
+  /**
+   * shareUrl 是否必填。
+   *
+   * 外链附件（含新建）必填；编辑本地上传的附件时留空是正常的，不能拦住保存。
+   */
+  requireShareUrl: boolean;
   onSubmit: (input: AttachmentCreateInput) => void;
   onCancel: () => void;
 }
 
 /**
- * 附件表单：新建与编辑共用。
+ * 附件表单：外链附件的新建与编辑共用。
  *
  * 调用方按 `editing?.id` 换 key 重挂载，默认值随编辑对象自然重置，
  * 省掉"实体变了要把值写回表单"的同步逻辑。
@@ -128,11 +142,14 @@ interface AttachmentFormProps {
 function AttachmentForm({
   editing,
   busy,
+  requireShareUrl,
   onSubmit,
   onCancel,
 }: AttachmentFormProps) {
   const { register, handleSubmit, formState } = useForm<AttachmentFormValues>({
-    resolver: zodResolver(attachmentFormSchema),
+    resolver: zodResolver(
+      requireShareUrl ? attachmentFormSchema : attachmentLocalFormSchema,
+    ),
     defaultValues: toFormValues(editing),
   });
 
@@ -143,9 +160,16 @@ function AttachmentForm({
       onSubmit={handleSubmit((values) => onSubmit(toWriteInput(values)))}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">
-          {editing ? `编辑附件 #${editing.id}` : "新建附件"}
-        </h2>
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold">
+            {editing ? `编辑附件 #${editing.id}` : "新建外链附件"}
+          </h2>
+          {editing ? null : (
+            <p className="text-xs text-muted-foreground">
+              这里只登记外部网盘链接；文件存在本站的附件请用上面的「上传附件」。
+            </p>
+          )}
+        </div>
         {editing ? (
           <Button
             type="button"
@@ -210,6 +234,11 @@ function AttachmentForm({
             id={errorId("shareUrl")}
             message={formState.errors.shareUrl?.message}
           />
+          {requireShareUrl ? null : (
+            <p className="text-xs text-muted-foreground">
+              本地附件留空即可；填了必须是可以直接打开的 http(s) 地址。
+            </p>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -300,17 +329,212 @@ function AttachmentForm({
       </div>
 
       <Button type="submit" disabled={busy}>
-        {busy ? "保存中…" : editing ? "保存修改" : "创建附件"}
+        {busy ? "保存中…" : editing ? "保存修改" : "创建外链附件"}
+      </Button>
+    </form>
+  );
+}
+
+interface AttachmentUploadFormProps {
+  busy: boolean;
+  /** 上传成功返回 true，表单据此清空自身；失败时由调用方展示错误。 */
+  onSubmit: (input: AttachmentUploadInput) => Promise<boolean>;
+}
+
+/**
+ * 上传本地附件：选文章 → 选文件 → 提交 multipart。
+ *
+ * 文章下拉复用 `adminPostApi.list`（服务端单页上限 50），带关键字输入；
+ * 选中的文章即使被下一次关键字搜索挤出列表也保留在选项里，避免选择被悄悄清掉。
+ */
+function AttachmentUploadForm({ busy, onSubmit }: AttachmentUploadFormProps) {
+  const [keyword, setKeyword] = useState("");
+  const [selected, setSelected] = useState<{ id: number; title: string } | null>(
+    null,
+  );
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
+  const [version, setVersion] = useState("");
+  const [sort, setSort] = useState("0");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const { data, error: loadError } = useSWR<PostListResult, ApiError>(
+    swrKeys.adminPostOptions(keyword, POST_OPTION_PAGE_SIZE),
+    () =>
+      adminPostApi.list({
+        page: 1,
+        pageSize: POST_OPTION_PAGE_SIZE,
+        keyword,
+      }),
+  );
+
+  const fetched = (data?.list ?? []).map((post) => ({
+    id: post.id,
+    title: post.title,
+  }));
+  const options =
+    selected && !fetched.some((option) => option.id === selected.id)
+      ? [selected, ...fetched]
+      : fetched;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) {
+      setError("请选择附件要挂载的文章");
+      return;
+    }
+    if (!file) {
+      setError("请选择要上传的文件");
+      return;
+    }
+    if (sort.trim() && !/^\d+$/.test(sort.trim())) {
+      setError("排序值必须是非负整数");
+      return;
+    }
+
+    setError(null);
+    setSubmitting(true);
+    try {
+      const uploaded = await onSubmit({
+        file,
+        postId: selected.id,
+        title: title.trim(),
+        version: version.trim(),
+        sort: sort.trim() ? Number(sort.trim()) : undefined,
+      });
+      if (uploaded) {
+        setTitle("");
+        setVersion("");
+        setSort("0");
+        setFile(null);
+        if (inputRef.current) {
+          inputRef.current.value = "";
+        }
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const working = busy || submitting;
+
+  return (
+    <form
+      className="space-y-4 rounded-lg border border-border p-4"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
+      <div className="space-y-1">
+        <h2 className="text-sm font-semibold">上传附件</h2>
+        <p className="text-xs text-muted-foreground">
+          文件存进本站的附件目录，公开地址与外部链接共用同一个跳转入口。
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="attachment-upload-keyword">搜索文章</Label>
+          <Input
+            id="attachment-upload-keyword"
+            placeholder="按标题关键字过滤"
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="attachment-upload-post">所属文章</Label>
+          <FieldSelect
+            id="attachment-upload-post"
+            value={selected ? String(selected.id) : ""}
+            onChange={(event) => {
+              const id = Number(event.target.value);
+              const found = options.find((option) => option.id === id);
+              setSelected(found ?? null);
+            }}
+          >
+            <option value="">请选择文章</option>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                #{option.id} {option.title || "（无标题）"}
+              </option>
+            ))}
+          </FieldSelect>
+          {loadError ? (
+            <p className="text-xs text-destructive">
+              文章列表加载失败：{loadError.message}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {`最多列出 ${POST_OPTION_PAGE_SIZE} 篇，用关键字缩小范围。`}
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="attachment-upload-title">标题（可空）</Label>
+          <Input
+            id="attachment-upload-title"
+            placeholder="留空取文件名"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="attachment-upload-version">版本（可空）</Label>
+          <Input
+            id="attachment-upload-version"
+            placeholder="v1"
+            value={version}
+            onChange={(event) => setVersion(event.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="attachment-upload-sort">排序（可空）</Label>
+          <Input
+            id="attachment-upload-sort"
+            inputMode="numeric"
+            value={sort}
+            onChange={(event) => setSort(event.target.value.replace(/\D/g, ""))}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="attachment-upload-file">文件</Label>
+          <input
+            ref={inputRef}
+            id="attachment-upload-file"
+            type="file"
+            className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-sm"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+          <p className="text-xs text-muted-foreground">
+            单文件上限见设置页；.php / .html / .exe / .svg 等类型与隐藏文件会被服务端拒绝。
+          </p>
+        </div>
+      </div>
+
+      {error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <Button type="submit" disabled={working}>
+        {working ? "上传中…" : "上传附件"}
       </Button>
     </form>
   );
 }
 
 /**
- * 附件管理（D14）：分页表格 + 新建/编辑 + 删除。
+ * 附件管理（D14）：分页表格 + 本地上传 + 外链新建/编辑 + 删除。
  *
- * 附件是挂在文章下的外部文件（网盘分享链接），公开访问一律经
- * `/api/attachments/{id}/go` 302 跳转并计点击，所以列表里给的是跳转地址而不是 shareUrl。
+ * 附件有两种来源：本地上传（storageKey 非空，文件由本站下发）与历史外链（shareUrl）。
+ * 公开访问一律经 `/api/attachments/{id}/go` 并计点击，所以列表里给的是跳转地址而不是 shareUrl。
  *
  * 页码放在查询串里，为的是复用 `ui/shared/pagination.tsx` 的链接式分页；
  * 筛选条件留在组件内，查询串变化不会把它们重置。
@@ -377,7 +601,7 @@ export function AttachmentManager() {
         setNotice(`附件 #${editing.id} 已更新。`);
       } else {
         await adminAttachmentApi.create(input);
-        setNotice("附件已创建。");
+        setNotice("外链附件已创建。");
       }
       setEditing(null);
       // 换 key 重挂载表单，否则新建成功后表单里还留着上一次的值。
@@ -390,8 +614,26 @@ export function AttachmentManager() {
     }
   }
 
+  /** 上传本地附件；失败时把信封的 msg（415 / 413 等）直接显示出来。 */
+  async function upload(input: AttachmentUploadInput): Promise<boolean> {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const item = await adminAttachmentApi.upload(input);
+      setNotice(`附件「${item.title}」已上传。`);
+      await mutate();
+      return true;
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "上传失败，请稍后重试");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(item: AdminAttachment) {
-    if (!window.confirm(`确定删除附件「${item.title}」？公开跳转地址会立即失效。`)) {
+    if (!window.confirm(`确定删除附件「${item.title}」？公开地址会立即失效。`)) {
       return;
     }
     setBusy(true);
@@ -426,7 +668,7 @@ export function AttachmentManager() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">附件</h1>
         <p className="text-sm text-muted-foreground">
-          {`共 ${total} 个；公开地址一律经 /api/attachments/{id}/go 302 跳转并计一次点击。`}
+          {`共 ${total} 个；本地上传的附件由本站直接下发，外链附件 302 跳转，两种都经 /api/attachments/{id}/go 计一次点击。`}
         </p>
       </header>
 
@@ -487,10 +729,13 @@ export function AttachmentManager() {
         </p>
       ) : null}
 
+      <AttachmentUploadForm busy={busy} onSubmit={upload} />
+
       <AttachmentForm
         key={`${editing?.id ?? "new"}-${formVersion}`}
         editing={editing}
         busy={busy}
+        requireShareUrl={editing ? editing.storageKey === "" : true}
         onSubmit={(input) => void save(input)}
         onCancel={() => setEditing(null)}
       />
@@ -502,7 +747,7 @@ export function AttachmentManager() {
           <p className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">
             {postIdFilter
               ? `文章 #${postIdFilter} 还没有附件。`
-              : "还没有附件，用上面的表单新建一个。"}
+              : "还没有附件，用上面的「上传附件」传一个，或用表单登记外链。"}
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-border">
@@ -512,6 +757,9 @@ export function AttachmentManager() {
                 <tr>
                   <th scope="col" className="px-4 py-3 font-medium">
                     标题
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
+                    来源
                   </th>
                   <th scope="col" className="px-4 py-3 font-medium">
                     文件
@@ -534,66 +782,81 @@ export function AttachmentManager() {
                 </tr>
               </thead>
               <tbody>
-                {data.list.map((item) => (
-                  <tr key={item.id} className="border-t border-border">
-                    <td className="px-4 py-3">
-                      <p className="font-medium">{item.title}</p>
-                      <p className="text-xs text-muted-foreground">
-                        文章 #{item.postId} · sort {item.sort}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p
-                        className="max-w-[16rem] truncate"
-                        title={item.fileName || undefined}
-                      >
-                        {item.fileName || "—"}
-                      </p>
-                      <code className="text-xs text-muted-foreground">
-                        {attachmentGoPath(item.id)}
-                      </code>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {item.bytes ? formatBytes(item.bytes) : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {item.version || "—"}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {item.clicks}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {formatDateTime(item.createdAt)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void copyPath(item)}
+                {data.list.map((item) => {
+                  const local = item.storageKey !== "";
+                  return (
+                    <tr key={item.id} className="border-t border-border">
+                      <td className="px-4 py-3">
+                        <p className="font-medium">{item.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          文章 #{item.postId} · sort {item.sort}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={local ? "default" : "muted"}>
+                          {local ? "本地" : "外链"}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p
+                          className="max-w-[16rem] truncate"
+                          title={item.fileName || undefined}
                         >
-                          {copied === item.id ? "已复制" : "复制跳转地址"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setEditing(item)}
-                          disabled={busy}
-                        >
-                          编辑
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => void remove(item)}
-                          disabled={busy}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {item.fileName || "—"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {item.mime || "—"}
+                        </p>
+                        <code className="text-xs text-muted-foreground">
+                          {attachmentGoPath(item.id)}
+                        </code>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {item.bytes ? formatBytes(item.bytes) : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {item.version || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {item.clicks}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {formatDateTime(item.createdAt)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void copyPath(item)}
+                          >
+                            {copied === item.id
+                              ? "已复制"
+                              : local
+                                ? "复制下载地址"
+                                : "复制跳转地址"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setEditing(item)}
+                            disabled={busy}
+                          >
+                            编辑
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => void remove(item)}
+                            disabled={busy}
+                          >
+                            删除
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

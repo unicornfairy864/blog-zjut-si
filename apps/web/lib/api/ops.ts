@@ -12,6 +12,10 @@ export interface AdminAttachment {
   version: string;
   sort: number;
   clicks: number;
+  /** 非空表示本地上传（文件在 file.dir 下），空串表示外链附件。 */
+  storageKey: string;
+  /** 文件头嗅探出的 MIME，只作展示与排障；下载时服务端一律发 octet-stream。 */
+  mime: string;
   createdAt: number;
 }
 
@@ -23,7 +27,12 @@ export interface AdminAttachmentListResult {
   pageSize: number;
 }
 
-/** 新建附件入参；postId / title / shareUrl 必填，shareUrl 必须是 http(s)（api.md「跳转与附件」）。 */
+/**
+ * 新建外链附件入参；postId / title / shareUrl 必填，shareUrl 必须是 http(s)。
+ *
+ * 本地文件不走这里：POST /api/admin/attachments 只登记外链，shareUrl 为空会被 400 拒绝，
+ * 上传本地附件请用 `adminAttachmentApi.upload`。
+ */
 export interface AttachmentCreateInput {
   postId: number;
   title: string;
@@ -31,6 +40,16 @@ export interface AttachmentCreateInput {
   fileName?: string;
   bytes?: number;
   sha256?: string;
+  version?: string;
+  sort?: number;
+}
+
+/** 上传本地附件入参（multipart/form-data）。 */
+export interface AttachmentUploadInput {
+  file: File;
+  postId: number;
+  /** 留空时服务端取去掉扩展名的文件名。 */
+  title?: string;
   version?: string;
   sort?: number;
 }
@@ -104,8 +123,9 @@ export interface AuditLogQuery {
 }
 
 /**
- * 附件的公开跳转地址（相对路径，管理端与公开端同源）。
+ * 附件的公开地址（相对路径，管理端与公开端同源）。
  *
+ * 本地附件由本站直接下发文件，外链附件 302 跳到 shareUrl；两种都计一次点击。
  * 组件里禁止拼 API 路径（agent.md §8），所以地址形态收在这里，界面只负责展示与复制。
  */
 export function attachmentGoPath(id: number): string {
@@ -132,9 +152,37 @@ export const adminAttachmentApi = {
     );
   },
 
-  /** 新建附件。 */
+  /** 新建外链附件；shareUrl 为空会被服务端 400 拒绝（本地附件走 upload）。 */
   create(input: AttachmentCreateInput) {
     return apiFetch<AdminAttachment>("/api/admin/attachments", { json: input });
+  },
+
+  /**
+   * 上传本地附件（multipart/form-data）：文件存进 file.dir，记录带 storage_key 与 mime。
+   *
+   * 失败语义（信封的 msg 直接给用户看即可）：
+   * - `400 / 1003` 参数问题（缺 file / postId 非正整数）；
+   * - `415 / 2007` 扩展名或文件名被安全黑名单拒绝（如 .php / .html / .exe / .svg、隐藏文件）；
+   * - `413 / 2008` 超过 `file.maxBytes` 上限。
+   */
+  upload(input: AttachmentUploadInput) {
+    const form = new FormData();
+    form.append("postId", String(input.postId));
+    if (input.title) {
+      form.append("title", input.title);
+    }
+    if (input.version) {
+      form.append("version", input.version);
+    }
+    if (input.sort !== undefined) {
+      form.append("sort", String(input.sort));
+    }
+    form.append("file", input.file);
+    return apiFetch<AdminAttachment>("/api/admin/attachments/upload", {
+      method: "POST",
+      body: form,
+      timeoutMs: 120_000,
+    });
   },
 
   /** 更新附件；校验失败抛 ApiError(1003)，shareUrl 非 http(s) 同理。 */

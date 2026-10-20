@@ -11,8 +11,9 @@ import {
   type MediaListResult,
 } from "@/lib/api/media";
 import { swrKeys } from "@/lib/swr/keys";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatDateTime } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
+import { Badge } from "@/ui/shadcn/badge";
 import { Button } from "@/ui/shadcn/button";
 import { Loading } from "@/ui/shared/loading";
 
@@ -99,6 +100,29 @@ export function MediaLibrary() {
       await mutate();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "重新处理失败");
+    }
+  }
+
+  /**
+   * 删除原图：四档变体保留，但原图不可恢复。
+   *
+   * 删掉后 retry 会 404，所以二次确认里要把这一点说清楚。
+   */
+  async function handleRemoveOriginal(item: MediaItem) {
+    const confirmed = window.confirm(
+      `确定删除 ${item.originalName} 的原图？\n四档变体会保留，但原图删掉后无法再重新转码。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setError(null);
+    try {
+      await adminMediaApi.removeOriginal(item.id);
+      await mutate();
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError ? caught.message : "删除原图失败，请稍后重试",
+      );
     }
   }
 
@@ -200,6 +224,18 @@ export function MediaLibrary() {
                     <p className="text-xs text-muted-foreground">
                       {item.width}×{item.height} · {formatBytes(item.bytes)}
                     </p>
+                    {item.origArchived ? (
+                      <Badge
+                        variant="muted"
+                        title={
+                          item.origArchivedAt
+                            ? `原图删除于 ${formatDateTime(item.origArchivedAt)}`
+                            : "原图已从磁盘删除，四档变体保留"
+                        }
+                      >
+                        原图已删除
+                      </Badge>
+                    ) : null}
                     <div className="flex flex-wrap gap-1">
                       <Button
                         size="sm"
@@ -216,19 +252,34 @@ export function MediaLibrary() {
                         复制链接
                       </Button>
                       {item.origUrl ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void copyText(item.origUrl, `orig-${item.id}`)}
-                        >
-                          {copied === `orig-${item.id}` ? "已复制" : "复制原图链接"}
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void copyText(item.origUrl, `orig-${item.id}`)}
+                          >
+                            {copied === `orig-${item.id}` ? "已复制" : "复制原图链接"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => void handleRemoveOriginal(item)}
+                          >
+                            删除原图
+                          </Button>
+                        </>
                       ) : null}
                       {item.status === "failed" ? (
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => void handleRetry(item)}
+                          disabled={item.origArchived}
+                          title={
+                            item.origArchived
+                              ? "原图已删除，无法重新转码"
+                              : undefined
+                          }
                         >
                           重试
                         </Button>

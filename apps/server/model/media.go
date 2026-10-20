@@ -13,13 +13,15 @@ const (
 	MediaStatusFailed     = "failed"
 )
 
-// 存储驱动（agent.md §4）。
+// 存储驱动（agent.md §4）：图片与附件一律落本机磁盘，不接外部对象存储。
 const (
-	StorageDriverLocal     = "local"
-	StorageDriverCloudreve = "cloudreve"
+	StorageDriverLocal = "local"
 )
 
 // Media 对应 media 表；永不存 URL，只存 storage_key 与 variants_json（§10）。
+//
+// OrigArchived / OrigArchivedAt 表示"本地原图已不在"：管理端手动删除原图时置位，
+// 置位后「查看原图」不再输出链接、也不能重新转码（变体仍在本地）。
 type Media struct {
 	ID             int64        `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	SHA256         string       `gorm:"column:sha256" json:"sha256"`

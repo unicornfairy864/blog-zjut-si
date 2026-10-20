@@ -32,13 +32,17 @@ vi .env      # 填 BLOG_ADMIN_USERNAME / BLOG_ADMIN_PASSWORD（≥16 位）
 
 # 4) 数据目录（bind mount，见 compose.yaml）
 #    容器里 blogd 以 node(uid 1000) 运行，属主必须是 1000，否则 SQLite 无法建库。
-sudo mkdir -p /data/blog/db /data/blog/uploads
+sudo mkdir -p /data/blog/db /data/blog/uploads /data/blog/files
 sudo chown -R 1000:1000 /data/blog
 
-# 5) 构建并启动（首次会构建 Next 与 Go，约数分钟）
+# 5) 让宿主 nginx 能读图片（附件不直出，不需要这一步）；详见 §11.1
+sudo setfacl -R  -m u:www-data:rX /data/blog/uploads
+sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
+
+# 6) 构建并启动（首次会构建 Next 与 Go，约数分钟）
 docker compose up -d --build
 
-# 6) 确认两个进程都在
+# 7) 确认两个进程都在
 docker compose ps
 docker compose logs -f --tail=100
 ```
@@ -99,15 +103,17 @@ docker inspect --format '{{json .State.Health}}' zjut-blog | jq
 docker compose logs blog | jq -c 'select(.request_id=="<id>")'
 ```
 
-## 6. 备份与恢复（D17 前的临时做法）
+## 6. 备份与恢复
 
-D17 会落地 `VACUUM INTO` + uploads `rsync --link-dest` 的定时任务。当前手工步骤：
+`backup` 任务（D14 已落地，每日 03:00 / 可在 `/admin/jobs` 手动投递）会做 `VACUUM INTO` 与
+`uploads`、`files` 两个目录的硬链接快照，见 §11.4。下面是不依赖任务的手工兜底：
 
 ```bash
 # 备份：先停容器，避免 WAL 半写
 cd /srv/blog/deploy && docker compose stop blog
 sudo cp -a /data/blog/db/blog.db        /backup/blog-$(date +%F).db
 sudo cp -a /data/blog/uploads           /backup/uploads-$(date +%F)
+sudo cp -a /data/blog/files             /backup/files-$(date +%F)
 docker compose start blog
 
 # 恢复
@@ -116,6 +122,9 @@ sudo cp -a /backup/blog-2026-10-18.db   /data/blog/db/blog.db
 sudo rm -f /data/blog/db/blog.db-wal /data/blog/db/blog.db-shm
 docker compose start blog
 ```
+
+**说明**：`blog.db` 里的 `post_attachments.storage_key` / `media.storage_key` 只是相对路径，
+恢复时必须把 `uploads` 与 `files` 一起还原，否则管理端存储页会把它们全部报成"缺失文件"。
 
 ## 7. 环境变量
 
@@ -129,19 +138,15 @@ docker compose start blog
 | `BLOG_DB_PATH` | `./data/blog.db` | SQLite 文件 |
 | `BLOG_DB_MAX_OPEN_CONNS` | `4` | 连接池（×16MB 缓存） |
 | `BLOG_DB_AUTO_MIGRATE` | `true` | 启动时推进迁移 |
-| `BLOG_UPLOAD_DIR` | `./data/uploads` | 图片目录 |
-| `BLOG_UPLOAD_MAX_BYTES` | `31457280` | 单文件上限（30MB） |
+| `BLOG_UPLOAD_DIR` | `./data/uploads` | 图片目录（原图 + 四档变体） |
+| `BLOG_UPLOAD_MAX_BYTES` | `31457280` | 单张图片上限（30MB） |
+| `BLOG_FILE_DIR` | `./data/files` | 附件目录（`{sha[:2]}/{sha256}{ext}`），不能与 `BLOG_UPLOAD_DIR` 相同 |
+| `BLOG_FILE_MAX_BYTES` | `20971520` | 单个附件上限（20MB） |
 | `BLOG_AUTH_SESSION_TTL_HOURS` | `168` | 会话有效期（滑动） |
 | `BLOG_AUTH_COOKIE_SECURE` | `false` | 隧道走 http，保持 false |
 | `BLOG_LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 | `BLOG_TASK_ENABLED` | `true` | 调度器开关 |
-| `BLOG_BACKUP_DIR` | `./data/backup` | `backup` 任务的落点：`blog-YYYYMMDD.db` + `uploads-YYYYMMDD/` |
-| `BLOG_CLOUDREVE_ENABLED` | `false` | 是否启用归档（原图 + 四档变体） |
-| `BLOG_CLOUDREVE_WEBDAV_URL` | 空 | Cloudreve WebDAV 地址（如 `https://pan.example.com/dav`） |
-| `BLOG_CLOUDREVE_USERNAME` / `BLOG_CLOUDREVE_PASSWORD` | 空 | WebDAV 账号；口令含 `$` 时在 `.env` 写成 `$$` |
-| `BLOG_CLOUDREVE_BASE_PATH` | `/blog` | 远端目录（相对 WebDAV 账号根目录），原图写成 `{base}/{sha256}.{ext}` |
-| `BLOG_CLOUDREVE_PUBLIC_BASE_URL` | 空 | 图床匿名直出前缀（如 `https://pan.example.com/public/blog`）；填了才给正文图片加「查看原图」链接 |
-| `BLOG_CLOUDREVE_ARCHIVE_VARIANTS` | `true` | 四档 WebP 变体是否也推上图床 |
+| `BLOG_BACKUP_DIR` | `./data/backup` | `backup` 任务的落点：`blog-YYYYMMDD.db` + `uploads-YYYYMMDD/` + `files-YYYYMMDD/` |
 | `BLOG_CONFIG` | 空 | 显式指定配置文件 |
 | `BLOG_MIGRATE_ONLY` | 空 | 设为 `1` 时只迁移后退出 |
 | `BLOG_ADMIN_USERNAME` / `BLOG_ADMIN_PASSWORD` | 空 | 首次引导创建管理员 |
@@ -178,158 +183,104 @@ sudo certbot --nginx -d blog.zjut.si        # 首次
 sudo certbot renew --dry-run                # 每月演练
 ```
 
-## 11. 图床：Cloudreve WebDAV 归档（D8）
+## 11. 本地存储：图片与附件
 
-本站的图片**不在图床上直接对外提供**：公开站由 nginx 直出本机 `/data/blog/uploads`，
-Cloudreve 保存**原图 + 四档变体归档**（§10），用于 30 天后清理本地原图、以及原图长期留存；
-配了 `public_base_url` 后，正文图片的「查看原图」直链也指向图床上的原图。
+**没有图床**：v1.13 起 Cloudreve / WebDAV 集成已删除，图片与附件都是本机磁盘上的**唯一副本**，
+所以备份必须覆盖这两个目录（§11.5），空间回收只能在 `/admin` 里手动做。
 
-### 11.1 Cloudreve 侧
+| 内容 | 容器内路径 | 宿主路径 | 对外出口 |
+| --- | --- | --- | --- |
+| 图片（原图 + 四档变体） | `/data/blog/uploads` | 同名 bind mount | 宿主 nginx `location /uploads/` 直出；8641 上由 Go 直出（隧道预览用） |
+| 附件 | `/data/blog/files` | 同名 bind mount | 只经 `GET /api/attachments/{id}/go`，**不做静态直出** |
 
-1. 在 Cloudreve 里新建目录 `/blog`（与 `BLOG_CLOUDREVE_BASE_PATH` 对应）。
-2. 右上角头像 → **WebDAV 账号**，新建一个账号：
-   - 目录权限只勾 `/blog`，不要给整盘；
-   - 记下 WebDAV 用户名与密码。
-   - 账号的**根目录**决定了 `BASE_PATH` 的基准：根目录设成网盘的 `public`，则 `BASE_PATH=/blog`
-     落到 `public/blog`。
-3. 存储策略的**文件名规则必须是 `{originname}`**（不能含 `{uuid}`/`{randomkey8}` 这类随机段），
-   否则博客算不出直链；同时 nginx 直出的目录权限要放开，否则一律 `403`。见 §11.5。
-4. WebDAV 地址通常是 `https://<你的域名>/dav`（Cloudreve v3/v4 默认路径）。
-   先手工验证一次：
-   ```bash
-   curl -u '用户名:口令' -X PROPFIND https://pan.example.com/dav/blog -H 'Depth: 0'
-   ```
-   返回 `207 Multi-Status` 即通；`401` 是账号或路径权限不对。
-
-### 11.2 博客侧
-
-编辑 `deploy/.env`：
-
-```dotenv
-BLOG_CLOUDREVE_ENABLED=true
-BLOG_CLOUDREVE_WEBDAV_URL=https://pan.example.com/dav
-BLOG_CLOUDREVE_USERNAME=blog-archive
-BLOG_CLOUDREVE_PASSWORD=your-password
-BLOG_CLOUDREVE_BASE_PATH=/blog
-# 图床匿名直出前缀；留空则不产出「查看原图」链接
-BLOG_CLOUDREVE_PUBLIC_BASE_URL=https://pan.example.com/public/blog
-# 四档变体是否也推上图床
-BLOG_CLOUDREVE_ARCHIVE_VARIANTS=true
-```
-
-`BLOG_CLOUDREVE_BASE_PATH` 是**相对 WebDAV 账号根目录**的路径：账号根目录若已设为网盘的
-`public` 目录，这里填 `/blog` 就会落到 `public/blog`，直出地址就是
-`https://pan.example.com/public/blog/…`（见 §11.5 的命名与权限要求）。
-
-口令包含 `$` 时必须写成 `$$`（compose 会先做变量插值）。改完：
+### 11.1 目录与权限（部署时做一次）
 
 ```bash
-cd /srv/blog/deploy
-docker compose up -d          # 只改 env，不需要 --build
-docker compose logs --tail=50 blog
+sudo mkdir -p /data/blog/db /data/blog/uploads /data/blog/files
+
+# 容器以 uid 1000 写文件（目录 0750、文件 0640），nginx 默认用户 www-data 读不到
+sudo setfacl -R  -m u:www-data:rX /data/blog/uploads
+sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
 ```
 
-### 11.3 验证归档
+- 只给 **uploads** 放权限就够了：附件不直出，`files/` 不需要 nginx 可读。
+- `-d` 是默认 ACL，之后新建的子目录自动继承；不加就得每次新增都重跑一遍。
+- 判据：`403` 是目录缺 `x` 位、nginx 穿不过去（连不存在的文件也 403）；`404` 才是路径/文件名写错。
+- 没有 acl 支持时退而求其次：`sudo chmod -R a+rX /data/blog/uploads`。
+- 验证：
 
-1. 媒体库上传一张图，等状态从「处理中」变成可预览。
-2. 查看任务：
-   ```bash
-   docker compose exec blog sh -c 'true'   # 容器内没有 sqlite3，任务状态用 API 或日志看
-   docker compose logs --tail=100 blog | grep media_archive
-   ```
-3. Cloudreve 的 `/blog` 下应出现 5 个文件（原图 + 四档变体）：
-   ```
-   {sha256}.jpg  {sha256}_480.webp  {sha256}_960.webp  {sha256}_1600.webp  {sha256}_2400.webp
-   ```
-   只想归档原图就设 `BLOG_CLOUDREVE_ARCHIVE_VARIANTS=false`。
-4. 配了 `BLOG_CLOUDREVE_PUBLIC_BASE_URL` 时，直链应能匿名读到（`200`；`403` 是目录权限没放开、
-   `404` 是文件名规则不是 `{originname}`，见 §11.5）：
-   ```bash
-   curl -sI https://pan.example.com/public/blog/{sha256}.jpg | head -3
-   ```
-   媒体库里该图会多出「复制原图链接」按钮，公开详情返回的 `contentHtml` 里图片会被包上
-   `<a class="media-orig" …>`。
-5. 本地原图仍在（30 天保留期，`cleanup` 在 D14 接入）：
-   ```bash
-   ls -l /data/blog/uploads/*/*/original.*
-   ```
+  ```bash
+  curl -sI https://blog.zjut.si/uploads/<sha 前两位>/<sha>/1600.webp | head -3   # 期望 200
+  ```
 
-归档失败时任务会按 1m / 5m / 15m 退避重试 3 次，之后 `jobs.status=failed`；
-日志里搜 `任务失败`，常见原因是 WebDAV 地址少了 `/dav`、账号没给 `/blog` 写权限、
-或口令里的 `$` 没转义。变体推送失败与原因同理，看 `media_archive` 那条日志里的文件名。
+### 11.2 附件
 
-### 11.4 不启用会怎样
+- 上限 `BLOG_FILE_MAX_BYTES`（默认 20MB）；扩展名/文件名黑名单见 agent.md §10，命中 → `415/2007`，
+  超限 → `413/2008`。
+- 落盘 `/data/blog/files/{sha[:2]}/{sha256}{ext}`，按内容去重：同一份文件被多篇文章引用时只占一份磁盘，
+  删掉记录后若没人再引用才会删文件。
+- 下载只走 `GET /api/attachments/{id}/go`：响应固定 `Content-Disposition: attachment` +
+  `application/octet-stream` + `nosniff`，并支持 `Range`；所以**不要**给 `/data/blog/files` 加 nginx 直出。
+- 自查：
 
-`BLOG_CLOUDREVE_ENABLED=false` 时上传、四档变体、媒体库全部照常工作，只是不推原图与变体、
-也不产出「查看原图」链接。之后想补归档：把开关打开并重建容器，然后在媒体库对每张图点「重试」
-即可重新投递任务（重试会重新生成变体并投递归档）。
+  ```bash
+  ls -l /data/blog/files/*/* | head
+  curl -sI https://blog.zjut.si/api/attachments/1/go | head -5     # 期望 200 + attachment 头
+  curl -sI https://blog.zjut.si/api/attachments/9999/go | head -1  # 期望 404
+  ```
 
-### 11.5 磁盘上的物理文件名不可预测（实测结论，别拿它做直出）
+### 11.3 空间回收与对账（`/admin/storage`）
 
-Cloudreve 落盘的文件名由**存储策略的两个模板**拼成（源码 `pkg/filemanager/fs/dbfs/dbfs.go`
-的 `generateSavePath`）：
+页面（或 `GET /api/admin/storage`）给出原图 / 变体 / 附件 / 合计占用、已删原图数，以及两张对账清单：
 
-```
-物理路径 = path.Join(策略.DirNameRule, 策略.FileNameRule)
-```
+| 清单 | 含义 | 处理 |
+| --- | --- | --- |
+| 孤儿文件 | 磁盘上有、数据库里没有任何记录引用 | 点「清理孤儿文件」（`POST /api/admin/storage/cleanup`）删掉 |
+| 缺失文件 | 数据库里有记录、磁盘上找不到 | **不会自动处理**：多半是手工删过文件或恢复备份不完整。要么补文件，要么在媒体库删掉该记录 |
 
-默认 `FileNameRule = {uid}_{randomkey8}_{originname}`，所以磁盘上是 `1_bTi2XvqV_target.png`
-（`1` = uid，`bTi2XvqV` = 8 位随机，`target.png` = 原名）。随机段是**每次上传时服务端现生成**的，
-WebDAV 不会把它交出来：
+- **删原图保变体**：媒体库每张图的「删除原图」（`DELETE /api/admin/media/{id}/original`）。
+  原图是重新转码的唯一来源，删掉后不能 `retry`、`origUrl` 与「查看原图」链接也会消失，四档变体不受影响。
+- 原图与附件**不参与 `cleanup` 自动清理**：它们是唯一副本，回收空间只能走上面两条路径。
 
-- `PROPFIND` 只返回虚拟路径和 4 字符 `getetag`（形如 `"XqUl"`，是 `pkg/hashid` 对文件 ID 的编码），
-  与物理名里的随机段无关；实测用 ETag 拼 `{uid}_{etag}_{name}` 等 10 种组合全部 404；
-- 同名、同内容都不去重：两次上传是两份物理文件，配额各自 +size；
-- 结论：**WebDAV 无法直接或低成本拿到物理名**，也无法反推。所以公开站的图片仍走确定性路径
-  `/data/blog/uploads/{sha[:2]}/{sha}/{480,960,1600,2400}.webp`（nginx 直出）；
-  图床的直出只用于「查看原图」，且必须先把命名规则改成可预测的形式（见下）。
+### 11.4 从图床时代升级上来（一次性）
 
-让 Cloudreve 的目录被匿名直出、且名字可预测，要改策略模板（后台 → 存储策略 → 编辑，
-字段就是 `DirNameRule` / `FileNameRule`，admin API 直接收整个 policy 对象）：
+`media.orig_archived` 换了语义，升级后必须对一次账，否则老图会全部显示成「原图已删除」：
 
-| 目标 | 写法 |
+| 版本 | 语义 |
 | --- | --- |
-| 平铺、直接用虚拟文件名 | `DirNameRule = <data>/public`，`FileNameRule = {originname}` |
-| 保留虚拟目录结构 | `DirNameRule = <data>/public/{path}`，`FileNameRule = {originname}` |
+| v1.12 及以前 | `1` = 已推送到 Cloudreve；`cleanup` 会在 30 天后删掉本地原图 |
+| v1.13 起 | `1` = 本地原图已被管理端手动删除（变体仍在），此时不给 `origUrl`、也不许 `retry` |
 
-可用变量（`pkg/util/common.go` 的 `ReplaceMagicVar`）：`{randomkey16}`、`{randomkey8}`、
-`{timestamp}`、`{timestamp_nano}`、`{randomnum2|3|4|8}`、`{uid}`、`{datetime}`、`{date}`、`{year}`、
-`{month}`、`{day}`、`{hour}`、`{minute}`、`{second}`、`{uuid}`、`{ext}`、`{originname}`、
-`{originname_without_ext}`、`{path}`、`{blob_name}`、`{blob_name_without_ext}`。
-
-改之前必须知道四件事：
-
-1. **只影响新上传**：老文件仍是旧名，旧 URL 继续可用，不会自动迁移（实测改规则后
-   `/public/1_bTi2XvqV_target.png` 仍是 `200`，而 `/public/target.png` 是 `404`）。
-2. **名字里不能含随机段**：`{uuid}`、`{randomkey8}`、`{randomkey16}` 是每次上传现场生成的，
-   WebDAV 不回传，客户端**永远算不出 URL**。要可预测只能用常量、`{uid}`、`{path}`、`{originname}`。
-   推荐的最终形态是 `FileNameRule = {originname}`：物理名 = 虚拟名，URL 即
-   `<公开前缀>/{sha256}.{ext}`，而唯一性由 Cloudreve 的同目录重名约束 + 博客的 sha256 文件名保证。
-3. **同名会撞**：模板里不含随机段时，不同虚拟目录的同名文件指向同一物理路径，Cloudreve 在非覆盖
-   模式下会直接报「文件已存在」（`pkg/filemanager/driver/local/local.go` 有 `util.Exists` 检查）。
-   博客上传用 `{sha256}.{ext}` 命名不会撞，手工上传的图会。
-4. **直出即公开**：`location /public/ { alias <策略根>/; }` 公开的是**整个策略根目录**，不是网盘里
-   那个名叫 `public` 的虚拟文件夹 —— 该策略下任何目录的文件都平铺在这个物理目录里，只要知道文件名
-   就能匿名下载。改成可预测命名后等于可被枚举下载，所以这种策略只应给专用归档账号用。
-   另外**绝不能**把 alias 指到 `<data>` 父目录（会暴露 `cloudreve.db` / `conf.ini`）。
-
-**权限：Cloudreve 建的目录是 0744，nginx 必然 403。**
-本地驱动建文件、建目录都用 `Perm = 0744`（`pkg/filemanager/driver/local/local.go`），
-目录 0744 表示 other 只有 `r` 没有 `x` —— www-data 无法**穿透**该目录，所以它下面
-**任何**路径（哪怕是根本不存在的文件）都返回 `403`，而不是 `404`。这也是区分「名字不对」和
-「没权限」的判据：`404` = 名字不对，`403` = 目录穿不过去。
-
-给策略根补一次权限，`-d` 让之后新建的 0744 目录自动继承：
+**先停容器再改库**（避免 WAL 半写），然后：
 
 ```bash
-sudo setfacl -R  -m u:www-data:rX <策略根>
-sudo setfacl -R -d -m u:www-data:rX <策略根>
-# 没有 acl 时退而求其次：sudo chmod -R a+rX <策略根>
-curl -sI https://pan.example.com/public/blog/<文件名> | head -3
+sqlite3 /data/blog/db/blog.db <<'SQL'
+-- 1) 清掉图床时代的归档标记；真正的原图还在不在由下一步对账
+UPDATE media SET orig_archived = 0, orig_archived_at = NULL;
+-- 2) 图床时代的 media_archive 任务已经没有 handler，直接删掉（留着会被标成"未知任务类型"）
+DELETE FROM jobs WHERE type = 'media_archive';
+SQL
+docker compose start
 ```
 
-注意博客容器自己写的文件（`/data/blog/uploads`）是 uid 1000、目录 0750/文件 0640，
-那是另一处 ACL，见 §10。
+改完打开 `/admin/storage`，看「缺失文件」里 `kind=original` 的条目——这些图的原图在旧
+`cleanup` 里已经被删掉了（图床也已下线，找不回来）：
+
+- 想保留文章里的图：四档变体还在，正文与列表照常显示，只是没有「查看原图」；
+- 想让状态一致：在媒体库对它们点「删除原图」（幂等，会把 `orig_archived` 打回 `1`），或直接删掉整张图。
+
+### 11.5 备份
+
+`backup` 任务（每日 03:00，站点时区；也可在 `/admin/jobs` 手动投递一次）产出：
+
+```
+$BLOG_BACKUP_DIR/blog-YYYYMMDD.db      # VACUUM INTO，保留 30 天
+$BLOG_BACKUP_DIR/uploads-YYYYMMDD/     # 图片硬链接快照，保留 90 天
+$BLOG_BACKUP_DIR/files-YYYYMMDD/       # 附件硬链接快照，保留 90 天
+```
+
+硬链接要求备份目录与数据目录在**同一个文件系统**上，否则会自动退回复制（慢且占空间）。
+恢复演练见 §16。
 
 ---
 
@@ -362,8 +313,8 @@ curl -s http://127.0.0.1:8640/api/links
 curl -s http://127.0.0.1:8640/api/pages/about
 ```
 
-浏览器侧：DevTools 切到 375px（iPhone SE），逐页确认**没有横向滚动条**；正文图片点开应打开原图
-（配了 `BLOG_CLOUDREVE_PUBLIC_BASE_URL` 时指向图床）。
+浏览器侧：DevTools 切到 375px（iPhone SE），逐页确认**没有横向滚动条**；正文图片点开应打开本地原图
+（`/uploads/{sha 前两位}/{sha}/original.jpg`，由 nginx 直出）。
 
 ### 12.1 测试数据从哪来
 
@@ -389,7 +340,7 @@ UPDATE posts
 
 -- 友链（status 只有 active / hidden，默认 active 即公开可见）
 INSERT INTO links (name, url, avatar, description, sort, status, created_at)
-  VALUES ('Cloudreve', 'https://pan.zjut.si', '', '自建图床', 1, 'active', strftime('%s','now'));
+  VALUES ('示例友链', 'https://example.com', '', '测试用', 1, 'active', strftime('%s','now'));
 
 -- 静态页 /about
 INSERT INTO pages (slug, title, content_md, content_html, content_text,
@@ -576,15 +527,13 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/jobs \
 
 ```bash
 sqlite3 /data/blog/db/blog.db <<'SQL'
--- 1) 回收站里 31 天前的文章
+-- 1) 回收站里 31 天前的文章（挑一篇带本地附件的，物理删除后附件文件也该消失）
 UPDATE posts SET deleted_at = strftime('%s','now') - 31*86400 WHERE id = <某篇>;
 -- 2) 91 天前的访问明细
 UPDATE page_views SET created_at = strftime('%s','now') - 91*86400 WHERE id = (SELECT max(id) FROM page_views);
 -- 3) 已过期的会话与预览链接
 UPDATE sessions SET expires_at = strftime('%s','now') - 10;
 UPDATE preview_tokens SET expires_at = strftime('%s','now') - 10;
--- 4) 归档满 31 天的图片（本地原图应被删，变体仍在）
-UPDATE media SET orig_archived = 1, orig_archived_at = strftime('%s','now') - 31*86400 WHERE id = <某个 ready 的图>;
 SQL
 docker compose start
 ```
@@ -597,7 +546,8 @@ SELECT count(*) FROM posts WHERE id = <某篇>;                 -- 0（已物理
 SELECT count(*) FROM page_views WHERE created_at < strftime('%s','now') - 90*86400;  -- 0
 SELECT count(*) FROM sessions WHERE expires_at < strftime('%s','now');               -- 0
 SELECT count(*) FROM preview_tokens WHERE expires_at < strftime('%s','now');         -- 0"
-ls /data/blog/uploads/<sha 前两位>/<sha>/original.*           # 已删除；480/960/1600/2400.webp 仍在
+ls /data/blog/uploads/<sha 前两位>/<sha>/original.*    # 仍在：原图不参与自动清理（§10）
+ls /data/blog/files/<被删文章的 storage_key>            # 已删除：没人再引用
 ```
 
 备份（`backup` 任务，落点 `BLOG_BACKUP_DIR`，默认 `./data/backup`）：
@@ -605,10 +555,10 @@ ls /data/blog/uploads/<sha 前两位>/<sha>/original.*           # 已删除；4
 ```bash
 curl -s -X POST http://127.0.0.1:8641/api/admin/jobs \
   -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"type":"backup"}'
-ls -lh /data/blog/backup/            # blog-YYYYMMDD.db + uploads-YYYYMMDD/（硬链接快照）
+ls -lh /data/blog/backup/   # blog-YYYYMMDD.db + uploads-YYYYMMDD/ + files-YYYYMMDD/（硬链接快照）
 ```
 
-- 库保留 30 天、图片快照保留 90 天，超期由下一次 `backup` 自己清掉。
+- 库保留 30 天、图片与附件快照保留 90 天，超期由下一次 `backup` 自己清掉。
 - `VACUUM INTO` 出来的 `.db` 可直接 `sqlite3 blog-YYYYMMDD.db .tables` 验证；恢复步骤见 §9。
 
 ---
@@ -630,11 +580,21 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/redirects -H 'Content-Type: appl
   -H "X-CSRF-Token: $CSRF" -d '{"fromPath":"/posts/old-slug","toPath":"/posts/new-slug","status":301}'
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8640/posts/old-slug   # 301 → /posts/new-slug
 
-# 3) 附件：建一条 → 公开 /go 302 且 clicks+1
+# 3) 附件：本地上传 → 公开 /go 直接下发且 clicks+1
+curl -s -X POST http://127.0.0.1:8641/api/admin/attachments/upload \
+  -H "X-CSRF-Token: $CSRF" \
+  -F "postId=<id>" -F "title=源码" -F "file=@/tmp/src.zip"
+curl -sI http://127.0.0.1:8640/api/attachments/<id>/go | head -6
+#    200 + Content-Disposition: attachment + Content-Type: application/octet-stream + nosniff
+curl -s -X POST http://127.0.0.1:8641/api/admin/attachments/upload \
+  -H "X-CSRF-Token: $CSRF" -F "postId=<id>" -F "file=@/tmp/shell.php"      # 期望 415/2007
+# 外链附件仍可登记（JSON，shareUrl 必填），/go 对它 302
 curl -s -X POST http://127.0.0.1:8641/api/admin/attachments -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" \
-  -d '{"postId":<id>,"title":"源码","shareUrl":"https://example.com/src.zip","fileName":"src.zip","bytes":1024,"sort":0}'
-curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8640/api/attachments/<id>/go
+  -d '{"postId":<id>,"title":"外链","shareUrl":"https://example.com/src.zip","fileName":"src.zip","bytes":1024,"sort":0}'
+
+# 4) 存储管理：/admin/storage 应显示原图/变体/附件占用；孤儿清单可一键清掉
+curl -s http://127.0.0.1:8641/api/admin/storage | head -c 400
 
 # 4) 设置：改时区 → content_version+1（公开读的 ETag 随之失效）
 curl -s -X PUT http://127.0.0.1:8641/api/admin/settings -H 'Content-Type: application/json' \
@@ -643,6 +603,6 @@ curl -s http://127.0.0.1:8640/api/site | head -c 200       # contentVersion 应�
 curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # 400/1003
 ```
 
-- `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`settings.update`…）。
-- 设置接口**永不返回** `visitor_salt` 与 WebDAV 口令；`/admin/settings` 里也只回显账号与地址。
+- `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`attachment.upload`、`settings.update`…）。
+- 设置接口**永不返回** `visitor_salt`；`/admin/settings` 里只回显目录、上限与任务周期。
 

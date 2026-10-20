@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -19,7 +18,6 @@ import (
 	"sync"
 
 	"github.com/buckket/go-blurhash"
-	"github.com/studio-b12/gowebdav"
 	"gorm.io/gorm"
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/core/imaging"
@@ -68,24 +66,26 @@ type MediaUploadResult struct {
 
 // MediaItem 是媒体库输出；URL 由 img_base_url 与 storage_key 拼出。
 type MediaItem struct {
-	ID           int64             `json:"id"`
-	SHA256       string            `json:"sha256"`
-	OriginalName string            `json:"originalName"`
-	Mime         string            `json:"mime"`
-	Ext          string            `json:"ext"`
-	Bytes        int64             `json:"bytes"`
-	Width        int               `json:"width"`
-	Height       int               `json:"height"`
-	Pixels       int64             `json:"pixels"`
-	Alt          string            `json:"alt"`
-	Blurhash     string            `json:"blurhash"`
-	Status       string            `json:"status"`
-	Error        string            `json:"error"`
-	URL          string            `json:"url"`
-	OrigURL      string            `json:"origUrl"`
-	Variants     map[string]string `json:"variants"`
-	CreatedAt    dbtime.Unix       `json:"createdAt"`
-	UpdatedAt    dbtime.Unix       `json:"updatedAt"`
+	ID             int64             `json:"id"`
+	SHA256         string            `json:"sha256"`
+	OriginalName   string            `json:"originalName"`
+	Mime           string            `json:"mime"`
+	Ext            string            `json:"ext"`
+	Bytes          int64             `json:"bytes"`
+	Width          int               `json:"width"`
+	Height         int               `json:"height"`
+	Pixels         int64             `json:"pixels"`
+	Alt            string            `json:"alt"`
+	Blurhash       string            `json:"blurhash"`
+	Status         string            `json:"status"`
+	Error          string            `json:"error"`
+	URL            string            `json:"url"`
+	OrigURL        string            `json:"origUrl"`
+	OrigArchived   bool              `json:"origArchived"`
+	OrigArchivedAt *dbtime.Unix      `json:"origArchivedAt"`
+	Variants       map[string]string `json:"variants"`
+	CreatedAt      dbtime.Unix       `json:"createdAt"`
+	UpdatedAt      dbtime.Unix       `json:"updatedAt"`
 }
 
 // mediaJobPayload 是 media_process / media_archive 的任务负载。
@@ -324,100 +324,68 @@ func (s MediaService) Process(mediaID int64) error {
 		return fmt.Errorf("更新媒体记录失败: %w", err)
 	}
 
-	if global.Config.Cloudreve.Enabled {
-		if err := enqueueMediaJob(global.DB, model.JobTypeMediaArchive, media.ID, now); err != nil {
-			return fmt.Errorf("投递归档任务失败: %w", err)
-		}
-		task.Notify()
-	}
 	return nil
 }
 
-// Archive 把原图与四档变体推送到 Cloudreve 的 WebDAV 目录，并记录归档时间（§10 步骤 6）。
+// RemoveOriginal 删除本地原图，只保留四档变体（§10 存储管理）。
 //
-// 远端文件名固定为 `{sha256}.{ext}`（原图）与 `{sha256}_{480,960,1600,2400}.webp`（变体），
-// 因此图床侧的 FileNameRule 必须是 {originname}，否则公开直链无法由博客算出（runbook §11.5）。
-func (s MediaService) Archive(mediaID int64) error {
-	config := global.Config.Cloudreve
-	if !config.Enabled {
-		return nil
-	}
-
-	media, err := model.FindMediaByID(global.DB, mediaID)
+// 原图是重新转码的唯一来源，删掉后 Retry 会明确报"原图不存在"；
+// 「查看原图」也会随之不再输出链接。重复执行幂等。
+func (s MediaService) RemoveOriginal(id int64, actor PostActor) (MediaItem, error) {
+	media, err := model.FindMediaByID(global.DB, id)
 	if err != nil {
-		return fmt.Errorf("查询媒体失败: %w", err)
+		if errors.Is(err, model.ErrNotFound) {
+			return MediaItem{}, errs.New(errs.ErrorNotFound, "图片不存在")
+		}
+		return MediaItem{}, fmt.Errorf("查询媒体失败: %w", err)
 	}
 
 	store := storage.Local{Root: global.Config.Upload.Dir}
-	items := make([]archiveFile, 0, 1+len(mediaVariantTiers))
-
-	originalPath, err := store.Path(media.StorageKey + "/original." + media.Ext)
-	if err != nil {
-		return fmt.Errorf("生成原图路径失败: %w", err)
-	}
-	items = append(items, archiveFile{local: originalPath, remote: media.SHA256 + "." + media.Ext})
-
-	if config.ArchiveVariants {
-		variants := mediaVariantFiles(media)
-		for _, tier := range mediaVariantTiers {
-			name := strconv.Itoa(tier)
-			if _, ok := variants[name]; !ok {
-				continue
-			}
-			variantPath, pathErr := store.Path(media.StorageKey + "/" + name + ".webp")
-			if pathErr != nil {
-				return fmt.Errorf("生成变体路径失败: %w", pathErr)
-			}
-			items = append(items, archiveFile{
-				local:  variantPath,
-				remote: media.SHA256 + "_" + name + ".webp",
-			})
-		}
+	originalPath, pathErr := store.Path(media.StorageKey + "/original." + media.Ext)
+	if pathErr != nil {
+		return MediaItem{}, fmt.Errorf("生成原图路径失败: %w", pathErr)
 	}
 
-	client := gowebdav.NewClient(config.WebDAVURL, config.Username, config.Password)
-	client.SetTimeout(config.Timeout())
-	if err := client.MkdirAll(config.BasePath, 0o755); err != nil {
-		return fmt.Errorf("创建图床目录失败: %w", err)
+	removed := true
+	switch err := os.Remove(originalPath); {
+	case err == nil:
+	case errors.Is(err, os.ErrNotExist):
+		removed = false
+	default:
+		return MediaItem{}, fmt.Errorf("删除原图失败: %w", err)
 	}
 
-	uploaded := make([]string, 0, len(items))
-	for _, item := range items {
-		file, openErr := os.Open(item.local)
-		if openErr != nil {
-			return fmt.Errorf("读取待归档文件失败: %w", openErr)
-		}
-		remote := path.Join(config.BasePath, item.remote)
-		writeErr := client.WriteStream(remote, file, 0o644)
-		_ = file.Close()
-		if writeErr != nil {
-			return fmt.Errorf("上传 %s 到图床失败: %w", item.remote, writeErr)
-		}
-		uploaded = append(uploaded, remote)
+	if media.OrigArchived {
+		// 已经标记过：文件本来就不在，直接返回现状。
+		return s.Item(media), nil
 	}
 
 	now := dbtime.Now()
-	if err := model.UpdateMediaFields(global.DB, media.ID, map[string]any{
-		"orig_archived":    true,
-		"orig_archived_at": now,
-		"updated_at":       now,
+	if err := global.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.UpdateMediaFields(tx, media.ID, map[string]any{
+			"orig_archived":    true,
+			"orig_archived_at": now,
+			"updated_at":       now,
+		}); err != nil {
+			return err
+		}
+		return ServiceGroupApp.Audit.WriteTx(tx, AuditInput{
+			AdminID:    actor.AdminID,
+			Action:     AuditActionMediaOriginalDelete,
+			TargetType: "media",
+			TargetID:   strconv.FormatInt(media.ID, 10),
+			Meta:       map[string]any{"sha256": media.SHA256, "removed": removed},
+			IP:         actor.IP,
+		})
 	}); err != nil {
-		return fmt.Errorf("更新归档状态失败: %w", err)
+		return MediaItem{}, fmt.Errorf("更新媒体记录失败: %w", err)
 	}
 
-	ServiceGroupApp.Audit.Write(AuditInput{
-		Action:     AuditActionMediaArchive,
-		TargetType: "media",
-		TargetID:   strconv.FormatInt(media.ID, 10),
-		Meta:       map[string]any{"remote": path.Join(config.BasePath, media.SHA256+"."+media.Ext), "files": uploaded},
-	})
-	return nil
-}
-
-// archiveFile 是一个待推送的本地文件与其远端文件名。
-type archiveFile struct {
-	local  string
-	remote string
+	updated, err := model.FindMediaByID(global.DB, media.ID)
+	if err != nil {
+		return MediaItem{}, fmt.Errorf("查询媒体失败: %w", err)
+	}
+	return s.Item(updated), nil
 }
 
 // mediaVariantFiles 解析 variants_json，返回档位到文件名的映射。
@@ -429,24 +397,15 @@ func mediaVariantFiles(media *model.Media) map[string]string {
 	return files
 }
 
-// cloudrevePublicBase 返回图床的匿名直出前缀；未启用或未配置时返回空串。
-func cloudrevePublicBase() string {
-	config := global.Config.Cloudreve
-	if !config.Enabled {
-		return ""
-	}
-	return strings.TrimRight(strings.TrimSpace(config.PublicBaseURL), "/")
-}
-
-// origURL 返回原图的公开直链；要求已归档且配置了 public_base_url。
+// origURL 返回原图的公开直链（与变体同源，由宿主 nginx 直出）。
 //
-// 图床的 FileNameRule 必须是 {originname}，否则这里算出的地址与实际文件名不一致。
-func origURL(media *model.Media) string {
-	base := cloudrevePublicBase()
-	if base == "" || !media.OrigArchived || media.SHA256 == "" {
+// 原图永久保留，所以只要没被管理端手动删除（orig_archived）就给链接；
+// 空 storage_key 的异常记录不输出链接。
+func origURL(media *model.Media, base string) string {
+	if media.OrigArchived || media.StorageKey == "" || media.Ext == "" {
 		return ""
 	}
-	return base + "/" + media.SHA256 + "." + media.Ext
+	return base + "/" + media.StorageKey + "/original." + media.Ext
 }
 
 // mediaUploadsSrcRe 匹配本站图片地址里的 storage_key（{sha[:2]}/{sha256}）。
@@ -469,13 +428,12 @@ type contentImage struct {
 	height  int
 }
 
-// DecorateContent 给正文里的本站图片补响应式属性并包上「查看原图」链接（§10 / §11）。
+// DecorateContent 给正文里的本站图片补响应式属性并包上「查看原图」链接（§10）。
 //
-// 读取时现算，所以归档晚于发布、变体后生成都不会漏：
+// 读取时现算，所以变体后生成也不会漏：
 //   - `srcset` 用该图的四档变体（不足两档不输出），`width`/`height` 防抖动，
 //     `loading="lazy"`/`decoding="async"` 默认加上；
-//   - 图床启用且配置了 `public_base_url`、该图已归档时，外面包一层
-//     `<a class="media-orig" href="{public_base_url}/{sha256}.{ext}">`。
+//   - 原图还在本地时，外面包一层 `<a class="media-orig" href="{img_base_url}/{key}/original.{ext}">`。
 //
 // 媒体表里查不到、或正文里的图片不是本站上传的，一律原样保留。
 func (s MediaService) DecorateContent(contentHTML string) string {
@@ -603,15 +561,6 @@ func (s MediaService) HandleProcess(_ context.Context, job *model.Job) error {
 	return nil
 }
 
-// HandleArchive 是 media_archive 的调度器入口。
-func (s MediaService) HandleArchive(_ context.Context, job *model.Job) error {
-	mediaID, err := parseMediaJob(job)
-	if err != nil {
-		return err
-	}
-	return s.Archive(mediaID)
-}
-
 // List 返回媒体库分页。
 func (s MediaService) List(page, pageSize int) ([]MediaItem, int64, error) {
 	items, total, err := model.ListMedia(global.DB, pageSize, (page-1)*pageSize)
@@ -674,35 +623,6 @@ func (s MediaService) Delete(id int64, actor PostActor) error {
 		_ = os.RemoveAll(dir)
 	}
 	return nil
-}
-
-// PurgeArchivedOriginals 删除已归档满一定时间的本地原图（§13 cleanup）。
-//
-// 四档变体仍在本地，正文与列表不受影响（原图只用于"查看原图"与重新转码）；
-// 图床侧的原件不在这里删。重复执行是幂等的：文件不在就当已清理。
-func (s MediaService) PurgeArchivedOriginals(before dbtime.Unix) (int64, error) {
-	items, err := model.ListArchivedOriginalsBefore(global.DB, before)
-	if err != nil {
-		return 0, fmt.Errorf("查询可清理原图失败: %w", err)
-	}
-
-	store := storage.Local{Root: global.Config.Upload.Dir}
-	removed := int64(0)
-	for i := range items {
-		path, pathErr := store.Path(items[i].StorageKey + "/original." + items[i].Ext)
-		if pathErr != nil {
-			global.Log.Warn("跳过非法原图路径", "media_id", items[i].ID, "err", pathErr)
-			continue
-		}
-		switch err := os.Remove(path); {
-		case err == nil:
-			removed++
-		case errors.Is(err, os.ErrNotExist):
-		default:
-			global.Log.Warn("删除本地原图失败", "media_id", items[i].ID, "err", err)
-		}
-	}
-	return removed, nil
 }
 
 // Retry 把媒体重新置为 processing 并投递转码任务（D8 起改为异步）。
@@ -816,24 +736,26 @@ func toMediaItem(media *model.Media, base string) MediaItem {
 	}
 
 	return MediaItem{
-		ID:           media.ID,
-		SHA256:       media.SHA256,
-		OriginalName: media.OriginalName,
-		Mime:         media.Mime,
-		Ext:          media.Ext,
-		Bytes:        media.Bytes,
-		Width:        media.Width,
-		Height:       media.Height,
-		Pixels:       media.Pixels,
-		Alt:          media.Alt,
-		Blurhash:     media.Blurhash,
-		Status:       media.Status,
-		Error:        media.Error,
-		URL:          preferred,
-		OrigURL:      origURL(media),
-		Variants:     urls,
-		CreatedAt:    media.CreatedAt,
-		UpdatedAt:    media.UpdatedAt,
+		ID:             media.ID,
+		SHA256:         media.SHA256,
+		OriginalName:   media.OriginalName,
+		Mime:           media.Mime,
+		Ext:            media.Ext,
+		Bytes:          media.Bytes,
+		Width:          media.Width,
+		Height:         media.Height,
+		Pixels:         media.Pixels,
+		Alt:            media.Alt,
+		Blurhash:       media.Blurhash,
+		Status:         media.Status,
+		Error:          media.Error,
+		URL:            preferred,
+		OrigURL:        origURL(media, base),
+		OrigArchived:   media.OrigArchived,
+		OrigArchivedAt: media.OrigArchivedAt,
+		Variants:       urls,
+		CreatedAt:      media.CreatedAt,
+		UpdatedAt:      media.UpdatedAt,
 	}
 }
 

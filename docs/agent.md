@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.12**（2026-10-19 D14 内容管理 / 附件 / 任务与审计 / 设置，见 §22）
+> 版本：**v1.13**（2026-10-20 图床下线：图片与附件全部本地自托管，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -30,7 +30,7 @@
 | C7 | **不做用户系统** | 无注册、无登录用户、无个人中心；只有单一 `admins` 记录 |
 | C8 | **不做 TOTP / 2FA** | 仅用户名 + 密码 |
 | C9 | **公开页必须 SSR，管理页必须 CSR** | 见 §8 渲染契约 |
-| C10 | **图片不入库、不上 CDN** | 磁盘存文件，DB 只存 key 与元数据 |
+| C10 | **图片与附件都不入库、不上 CDN / 对象存储** | 磁盘存文件（`upload.dir` / `file.dir`），DB 只存 key 与元数据 |
 
 ---
 
@@ -61,7 +61,9 @@
 | Go 进程 | 双 listener 边缘路由、全部 API、静态文件校验、任务调度 | 不渲染 HTML 页面 |
 | Next 进程 | 全部页面渲染（公开 SSR + 管理 CSR + 预览页） | 不直连数据库、不写业务规则 |
 | SQLite | 唯一持久化存储 | 不存图片二进制 |
-| Cloudreve | 原图 + 四档变体归档（WebDAV），可选匿名直出给「查看原图」 | 不作为前台图片源 |
+| 本地磁盘 | 图片与附件的唯一副本（`/data/blog/uploads`、`/data/blog/files`） | 不接外部图床/对象存储 |
+
+**附件不经任何静态直出**：图片走宿主 nginx 的 `/uploads/`，附件只从 `GET /api/attachments/{id}/go` 出口（见 §10）。
 
 **端口 3065 属于既有服务，任何代码、配置、文档都不得改动它。**
 **健康检查端点只注册在 8641**，8640 上不暴露磁盘、队列、DB 状态。
@@ -159,8 +161,8 @@
 | `series` | id, name, slug, description, created_at | UNIQUE(slug) |
 | `preview_tokens` | token_hash PK, post_id, expires_at, used_at INT NULL, created_at | 24h 过期；`used_at` 非空即失效 |
 | `redirects` | id, from_path, to_path, status INT, hits INT, created_at | UNIQUE(from_path); CHECK(status IN (301,302)) |
-| `media` | id, sha256, storage_driver, storage_key, original_name, mime, ext, bytes, width, height, pixels, variants_json, blurhash, alt, status, error, orig_archived, orig_archived_at INT NULL, created_at, updated_at | UNIQUE(sha256); INDEX(status)；`orig_archived_at` 用于 30 天后清理本地原图 |
-| `post_attachments` | id, post_id, title, share_url, file_name, bytes, sha256, version, sort, clicks, created_at | INDEX(post_id) |
+| `media` | id, sha256, storage_driver, storage_key, original_name, mime, ext, bytes, width, height, pixels, variants_json, blurhash, alt, status, error, orig_archived, orig_archived_at INT NULL, created_at, updated_at | UNIQUE(sha256); INDEX(status)；`orig_archived=1` 表示本地原图已被管理端手动删除（变体仍在），原图不再自动清理 |
+| `post_attachments` | id, post_id, title, share_url, file_name, bytes, sha256, version, sort, clicks, storage_key, mime, created_at | INDEX(post_id); INDEX(storage_key)；`storage_key` 非空 = 本地上传（物理文件 `{file.dir}/{storage_key}`），空 = 外链（按 `share_url` 302） |
 | `comments` | id, post_id, parent_id, root_id, author_name, author_email, email_hash, author_url, content_md, content_html, status, ip_hash, ua, created_at, updated_at | INDEX(post_id,status,created_at); INDEX(status,created_at) |
 | `likes` | post_id, visitor_hash, created_at | PK(post_id,visitor_hash) |
 | `page_views` | id, post_id NULL, path, visitor_hash, referrer_host, created_at | INDEX(post_id,created_at)；明细保留 90 天 |
@@ -181,8 +183,8 @@ media.status    : processing | ready | failed      # uploading 是内存态，�
 comments.status : pending | approved | spam | deleted
 links.status    : active | hidden                  # 默认 active（migrations/000001）
 jobs.status     : pending | running | done | failed
-jobs.type       : publish_scheduled | media_process | media_archive | link_check | backup | cleanup
-storage_driver  : local | cloudreve
+jobs.type       : publish_scheduled | media_process | link_check | backup | cleanup
+storage_driver  : local                             # 只有本地磁盘，不接对象存储
 ```
 
 ---
@@ -224,6 +226,8 @@ storage_driver  : local | cloudreve
 | 2004 | `ERROR_SLUG_IMMUTABLE` | 409 | 已发布文章改 slug 未写 redirect |
 | 2005 | `ERROR_LOGIN_LOCKED` | 423 | 登录锁定 30 分钟 |
 | 2006 | `ERROR_PREVIEW_EXPIRED` | 410 | 预览链接过期或已用 |
+| 2007 | `ERROR_FILE_REJECTED` | 415 | 附件扩展名/文件名命中安全黑名单 |
+| 2008 | `ERROR_FILE_TOO_LARGE` | 413 | 附件字节数超过 `file.max_bytes` |
 
 **公开组（8640）**
 
@@ -231,7 +235,7 @@ storage_driver  : local | cloudreve
 
 **管理组（8641）**
 
-`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `POST /media/{id}/retry` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|PUT /pages/{slug}` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
+`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `DELETE /media/{id}/original` · `POST /media/{id}/retry` · `GET /storage` · `POST /storage/cleanup` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|PUT /pages/{slug}` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `POST /attachments/upload` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
 
 **内部组（8641，仅容器内/隧道）**
 
@@ -272,8 +276,11 @@ storage_driver  : local | cloudreve
 | 删除分类 | 连带清掉 `post_tags` / 把 `posts.series_id` 置 NULL，不删文章 |
 | 友链 CRUD | `GET|POST /links`、`PUT|DELETE /links/{id}`；`status` 只有 `active`/`hidden`，公开端只出 `active` |
 | 跳转 CRUD | `GET|POST /redirects`、`PUT|DELETE /redirects/{id}`；`status` 只有 301/302，`fromPath` 唯一且必须以 `/` 开头（≤200），`toPath` 必须以 `/` 开头或 `http(s)://` 开头（≤500）；**公开边缘按 `from_path` 精确匹配直接 301/302 并 `hits+1`**（在转 Next 之前处理） |
-| 附件 | `GET|POST /attachments`、`PUT|DELETE /attachments/{id}`；`shareUrl` 必填且是 http(s)；公开端 `GET /attachments/{id}/go` → `302` 到 `share_url` 并 `clicks+1`，不存在 → `404/1002`（`no-store`） |
-| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `400/1003`）；只读回显 `contentVersion`、上传目录与上限、任务开关与周期、图床开关与 `publicBaseUrl`（**口令永不返回**）。写成功必须 `content_version+1`（公开读的 ETag 依赖它） |
+| 附件 | `GET|POST /attachments`、`POST /attachments/upload`、`PUT|DELETE /attachments/{id}`；JSON 创建只用于**外链**（`shareUrl` 必填且是 http(s)，留空 → `400/1003`），本地文件走 `POST /attachments/upload`（multipart：`file`、`postId`、可选 `title`/`version`/`sort`，`title` 默认取去掉扩展名的文件名） |
+| 附件安全 | 用**黑名单**拦扩展名与固定文件名（服务端脚本、可执行文件、浏览器会当页面渲染的 `html/svg/xml` 等，见 §10），命中 → `415/2007`；超过 `file.max_bytes` → `413/2008`；隐藏文件（`.` 开头）一律拒绝 |
+| 附件下载 | 公开 `GET /attachments/{id}/go`：本地的直接下发（`application/octet-stream` + `Content-Disposition: attachment` + `nosniff`，支持 Range），外链的 `302` 到 `share_url`；两种情况都 `clicks+1`、`no-store`；记录不存在 → `404/1002`，文件丢了 → `410/1007` |
+| 存储管理 | `GET /storage`：占用统计（原图/变体/附件/合计）+ 孤儿文件（磁盘有、库里无）+ 缺失文件（库里有、磁盘无）+ 已删原图数，清单各截断到 200/100 条但计数是全量；`POST /storage/cleanup` 只删孤儿，返回 `{removedFiles,removedBytes,failedFiles}` |
+| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `400/1003`）；只读回显 `contentVersion`、`upload{dir,maxBytes}`、`file{dir,maxBytes}`、`task{enabled,intervalSeconds}`、`db{path}`（**不含任何口令**）。写成功必须 `content_version+1`（公开读的 ETag 依赖它） |
 | 任务页 | `GET /jobs` 分页 + `POST /jobs` 手动投递 + `POST /jobs/{id}/retry`；`payload` 原样回显 JSON 字符串 |
 | 审计页 | `GET /audit-logs` 分页，支持 `action` / `targetType` / `targetId` 过滤；`meta` 以对象回显（库里是 JSON 字符串） |
 
@@ -442,7 +449,7 @@ apps/web/
 | CSRF | 双提交：`GET /auth/me` 返回明文 `csrf_token`，服务端存 `csrf_hash`；写请求带 `X-CSRF-Token` |
 | XSS | Markdown 渲染后过 bluemonday 白名单：禁 `script/iframe/on*/style` 表达式；允许 `span.math[data-tex]` |
 | 上传 | 魔数校验 + 扩展名白名单（jpeg/png/webp/gif）+ 像素上限 + 大小上限 30MB；HEIC/AVIF 明确拒绝并提示前端转码；文件名不落地 |
-| EXIF | 入库前按 Orientation 摆正并剥离全部 EXIF（含 GPS），再生成变体与归档 |
+| EXIF | 入库前按 Orientation 摆正并剥离全部 EXIF（含 GPS），再生成变体 |
 | SQL | 全参数化；FTS5 查询字符串必须转义 |
 | 越权 | 8640 层直接 404 掉 `/admin`、`/api/admin`，不依赖登录态判断 |
 | 限流 | 登录 5/min（按用户名）；评论 3/10min/IP；公开 API 20 r/s；点赞 10/min/visitor |
@@ -453,39 +460,60 @@ apps/web/
 
 ---
 
-## 10. 媒体管线规范
+## 10. 媒体与附件存储规范
 
-**上传流程**
+**图片上传流程**
 
 1. 浏览器端预压缩（长边 2560、WebP q0.85）→ 失败则原图直传
 2. Go 流式落盘临时文件 → 魔数/大小/像素校验 → 摆正并剥离 EXIF
 3. `sha256` 去重：命中则直接返回已有 `media`
 4. 入库 `processing` → 投递 `media_process`
 5. worker（并发 1）：生成 480/960/1600/2400 四档 WebP（q82）+ 20px blurhash；**变体不超过原图尺寸，不放大**
-6. `ready` → 投递 `media_archive`，WebDAV 推原图与四档变体到 Cloudreve
-   `/blog/{sha256}.{ext}` 与 `/blog/{sha256}_{480|960|1600|2400}.webp`（变体可关，见 `cloudreve.archive_variants`）
-7. 归档成功 → `orig_archived=1`，**本地原图保留 30 天**；`cleanup` 任务在 30 天后或磁盘 >85% 时删除
+6. `ready` → 结束。**没有归档步骤**：原图与变体都留在本机磁盘，原图**永久保留**（不再有 30 天清理）
 
-**URL 规则（唯一允许的形态）**
+**磁盘布局（唯一允许的形态）**
 
 ```
-{img_base_url}/{sha[0:2]}/{sha}/{variant}.webp
-例：http://blog.zjut.si/uploads/ab/abcdef.../1600.webp
+{BLOG_UPLOAD_DIR}/{sha[0:2]}/{sha}/original.{ext}      # 原图，永久保留
+{BLOG_UPLOAD_DIR}/{sha[0:2]}/{sha}/{480|960|1600|2400}.webp
+{BLOG_FILE_DIR}/{sha[0:2]}/{sha}{ext}                  # 附件，平铺单文件、无变体
+```
+
+- 两个根目录都必须落在容器内的 bind mount 上（默认 `/data/blog/uploads`、`/data/blog/files`），**不许相同**
+- 数据库只存 `storage_key`（图片是 `{sha[0:2]}/{sha}`，附件是 `{sha[0:2]}/{sha}{ext}`）与元数据，**永不存 URL**
+- 临时文件写在各根目录的 `.tmp/` 下，写完 `rename` 到位，读路径看不到半截文件
+
+**URL 规则**
+
+```
+{img_base_url}/{storage_key}/{variant}.webp        例：/uploads/ab/abcdef…/1600.webp
+{img_base_url}/{storage_key}/original.{ext}        # 「查看原图」，同源 nginx 直出
+/api/attachments/{id}/go                           # 附件唯一的下载出口
 ```
 
 - 禁止查询参数做版本（`?v=` 一律不允许）
-- 禁止把 Cloudreve 分享链接写进正文
+- 禁止把附件目录直接 alias 给 nginx：附件必须经 `/go` 出口，才能保证 `Content-Disposition: attachment`
+  + `Content-Type: application/octet-stream` + `nosniff`（任何扩展名都不会被浏览器当页面渲染）
 - `media` 表永不存 URL，只存 `storage_key` + `variants_json`
-- 「查看原图」用图床的**匿名直出**，不用分享链接：配了 `cloudreve.public_base_url` 后，
-  公开详情返回的 `contentHtml` 会给本站图片包一层
-  `<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank" rel="noopener noreferrer">`。
-  链接在**读取时现算**（归档晚于发布也不会漏），图床未启用或该图未归档时 `contentHtml` 原样返回
+- 「查看原图」指向**本地原图**：公开详情返回的 `contentHtml` 会给本站图片包一层
+  `<a class="media-orig" href="{img_base_url}/{storage_key}/original.{ext}" target="_blank" rel="noopener noreferrer">`。
+  链接在**读取时现算**；该图的原图被管理端手动删掉（`orig_archived=1`）时 `contentHtml` 原样返回、`MediaItem.origUrl` 为空串
 - 正文图片的 `srcset`（四档变体）/`sizes`/`width`/`height`/`loading` 也在**读取时**由同一处补上：
   存库的 `content_html` 保持编辑器产出的原始形态，响应里才是响应式版本（§16 G4「srcset 生效」）
-- 该直链成立的前提：图床存储策略的「文件名规则」必须是 `{originname}`，不能含 `{uuid}`/`{randomkey8}`
-  这类随机段，否则博客算不出真实文件名（原因与排查见 `docs/runbook.md` §11.5）
 
-**删除**：有引用返回 `409 / 2002` + 引用清单；无引用才删文件与记录。
+**附件安全（黑名单，`415/2007`）**
+
+文件既不会被执行、也不会被直出，所以只挡三类：能在服务器上跑的脚本（`php*`/`phtml`/`phar`/`jsp*`/`asp*`/`cgi`/`pl`/`py`/`rb`/`lua`/`sh`/`bat`/`ps1`/`jar`/`class`…）、
+浏览器会当页面渲染的（`html`/`htm`/`xhtml`/`shtml`/`svg`/`xml`/`mhtml`…）、以及可执行程序与装机镜像（`exe`/`msi`/`scr`/`vbs`/`js`/`apk`/`dmg`/`iso`/`deb`/`rpm`…）。
+另外固定拒绝 `.htaccess`/`.htpasswd`/`.user.ini`/`web.config`/`php.ini` 与一切 `.` 开头的隐藏文件。判定只看**最后一个扩展名**，大小写不敏感。
+
+**删除与空间回收**
+
+- 图片：有引用返回 `409 / 2002` + 引用清单；无引用才删文件与记录
+- 附件：删记录后，若没有别的记录引用同一 `storage_key` 才删文件（同一份文件可被多篇文章共用）
+- `DELETE /media/{id}/original`：只删原图、保留四档变体，置 `orig_archived=1`；此后不能 `retry`（原图是重新转码的唯一来源）
+- **原图与附件都不自动清理**：它们是唯一副本。回收空间只能在 `/admin` 的存储管理里手动操作（删原图保变体、清理孤儿文件）
+- 物理删除文章（回收站满 30 天）时，其附件的文件也会在没人再引用后被删掉
 
 ---
 
@@ -536,10 +564,9 @@ apps/web/
 | --- | --- | --- |
 | `publish_scheduled` | 定时发布时按 `published_at` 投递 | `scheduled` 且 `published_at<=now` → 发布（与手动发布同源）；已取消则跳过 |
 | `media_process` | 上传后 | 生成变体 + blurhash |
-| `media_archive` | 变体就绪 | WebDAV 推原图与四档变体到 Cloudreve |
 | `link_check` | 每周一 05:00 | HEAD 检查外链与正文图片，写 `link_checks` |
-| `backup` | 每日 03:00（Asia/Shanghai） | `VACUUM INTO` + uploads 快照 |
-| `cleanup` | 每日 04:00（Asia/Shanghai） | 物理删软删 >30 天的文章、删 `page_views` >90 天、裁剪 revision 到 50、删过期 session/preview_token/login_attempts、删归档满 30 天的本地原图 |
+| `backup` | 每日 03:00（Asia/Shanghai） | `VACUUM INTO` + `uploads` 与 `files` 两个目录的硬链接快照（`blog-YYYYMMDD.db` / `uploads-YYYYMMDD/` / `files-YYYYMMDD/`；库留 30 天、目录留 90 天） |
+| `cleanup` | 每日 04:00（Asia/Shanghai） | 物理删软删 >30 天的文章（含其附件文件）、删 `page_views` >90 天、裁剪 revision 到 50、删过期 session/preview_token/login_attempts。**不动原图与附件**（§10） |
 
 调度器：单 goroutine ticker，每 60s 扫描；取任务前 `UPDATE ... SET status='running', locked_at=? WHERE id=? AND status='pending'` 保证互斥。
 **任一任务进入 `failed` 或磁盘 >85%，必须触发一次通知**（邮件 / Telegram / webhook 任选其一，配置存 `settings`）。
@@ -560,7 +587,7 @@ apps/web/
 | 防火墙 | `ufw` 仅开 22/80/443；8640/8641 不对公网开放（由 compose 的 127.0.0.1 绑定兜底） |
 | SSH | 禁 root 密码登录，仅密钥；可选 fail2ban |
 | 隧道 | `ssh -L 8641:127.0.0.1:8641 user@host`，浏览器访问 `http://localhost:8641` |
-| 备份 | `VACUUM INTO /backup/blog-YYYYMMDD.db` + uploads `rsync --link-dest`（含原图，保留 90 天）；库保留 30 天；每周 `PRAGMA integrity_check` |
+| 备份 | `VACUUM INTO /backup/blog-YYYYMMDD.db` + `uploads`/`files` 两个目录的硬链接快照（含原图，目录保留 90 天）；库保留 30 天；每周 `PRAGMA integrity_check` |
 | 恢复 | 书面步骤在 `docs/runbook.md`，每季度演练一次"空机恢复" |
 | 日志留存 | 容器日志 3×10MB；审计日志永久 |
 
@@ -589,7 +616,7 @@ apps/web/
 | --- | --- | --- |
 | G1 骨架与鉴权 | D1–D3 | 空库全量迁移成功（23 表 + FTS 触发器）；`curl 127.0.0.1:8640/api/admin/posts` = 404；`curl 127.0.0.1:8640/healthz` = 404；`curl 公网IP:8641` 连接拒绝；5 次错误锁定 30min；会话 7 天过期；登出即失效；未登录 = 401/1000；无 CSRF = 403/1001；响应体为 `{code,data,msg}` |
 | G2 文章与渲染 | D4–D6 | 草稿不可见；slug 冲突 = 409/2001；`<script>` 被剥离；自动保存不产生多余 revision；发布后立即可见；编辑器预览 = 发布结果；2 字中文词可搜到；归档 = 410 |
-| G3 媒体 | D7–D8 | 31MB 拒绝 = 413；50MP 拒绝 = 2003；同图去重；引用删除 = 409/2002 + 清单；四档变体可访问；转码峰值 <300MB；GPS EXIF 不出现在输出图；HEIC 被拒并有提示；归档 30 天内本地原图仍在 |
+| G3 媒体与附件 | D7–D8 / v1.13 | 31MB 拒绝 = 413；50MP 拒绝 = 2003；同图去重；引用删除 = 409/2002 + 清单；四档变体可访问；转码峰值 <300MB；GPS EXIF 不出现在输出图；HEIC 被拒并有提示；原图永久保留；附件上传落 `file.dir`、`.php`/`.html`/`.exe` = 415/2007、超限 = 413/2008；`/go` 响应带 `Content-Disposition: attachment` + `octet-stream` + `nosniff`；`GET /storage` 的孤儿与缺失清单与磁盘一致 |
 | G4 公开端 | D9–D10 | 375px 无横向滚动；分页 + 标签组合正确；404 无堆栈；`srcset` 生效；系列/友链/关于页可访问 |
 | G5 互动 | D11–D12 | 评论 3/10min 限流；嵌套 ≤2 层；spam 不进公开列表；点赞幂等；同 visitor 10 分钟内 PV 只 +1；`stats_daily` 按上海时区切日 |
 | G6 发布控制 | D13 | 定时发布到点生效（误差 <90s）；回滚生成新 revision；预览链接 24h 后 = 410/2006；`cleanup` 能删掉构造的过期数据 |
@@ -610,7 +637,9 @@ apps/web/
 | 使用 `AutoMigrate` | SQLite 改列会静默失败 |
 | 把端口绑到宿主机的 `0.0.0.0` | 绕过 nginx 与隧道，安全事故 |
 | 在 8640 返回任何管理页面或管理 API | 破坏唯一安全边界 |
-| 把 Cloudreve 分享链接写进正文 | 链接会变，批量破图 |
+| 接外部图床 / 对象存储（Cloudreve、S3、OSS 等）托管图片或附件 | 外部服务一挂全站破图；图床已下线（v1.13） |
+| 把附件目录直接 alias 给 nginx 直出 | 失去 `Content-Disposition`/`nosniff` 保护，可下载的 HTML/SVG 会变成同源 XSS |
+| 自动清理本地原图或附件 | 它们已是唯一副本，只能由管理端显式删除（§10） |
 | 图片 URL 加 `?v=时间戳` | 摧毁浏览器缓存 |
 | 公开 HTML 与公开读接口 `Set-Cookie` | 无意义且污染缓存层；访客态写接口用 `X-Visitor-Id` 请求头（§5） |
 | 阅读数/点赞数 SSR 进 HTML | 无缓存层后依然要客户端异步，避免整页重渲染 |
@@ -628,7 +657,7 @@ apps/web/
 
 | 端 | 依赖 |
 | --- | --- |
-| Go | gin, gorm, glebarez/sqlite, golang-migrate, viper, goldmark(+GFM/attributes), chroma/v2, bluemonday, google/uuid, golang.org/x/crypto(argon2), golang.org/x/sync(errgroup), gen2brain/webp（wazero，构建加 `-tags nodynamic`）, golang.org/x/image(draw), buckket/go-blurhash, gowebdav, golang.org/x/time |
+| Go | gin, gorm, glebarez/sqlite, golang-migrate, viper, goldmark(+GFM/attributes), chroma/v2, bluemonday, google/uuid, golang.org/x/crypto(argon2), golang.org/x/sync(errgroup), gen2brain/webp（wazero，构建加 `-tags nodynamic`）, golang.org/x/image(draw), buckket/go-blurhash, golang.org/x/time |
 | Web | next(15.x), react, tailwindcss(3.x), shadcn/ui（含 @radix-ui/*、class-variance-authority、tailwindcss-animate）, lucide-react, swr, zod, react-hook-form(+@hookform/resolvers), date-fns, katex, clsx + tailwind-merge |
 | 测试 | go test + testify；vitest + testing-library；playwright |
 
@@ -647,7 +676,7 @@ apps/web/
 | D5 | M2 编辑器 + 自动保存 + 服务端预览 | 可写长文并预览 |
 | D6 | M2 渲染管线 + 搜索 | G2 全过 |
 | D7 | M3a 流式上传 + 单档 WebP + 媒体库 | 图文混排跑通 |
-| D8 | M3b 四档变体 + blurhash + WebDAV 归档 | G3 全过 |
+| D8 | M3b 四档变体 + blurhash + 本地原图永久保留 | G3 全过 |
 | D9 | M4a 首页/列表/详情/标签/归档 | 375px 通读 |
 | D10 | M4b 搜索/系列/关于/友链/404/410 | G4 全过 |
 | D11 | M5 评论 | G5 评论断言 |
@@ -756,6 +785,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.13 | 2026-10-20 | **图床下线，图片与附件全部本地自托管**：删除 Cloudreve/WebDAV 集成（`cloudreve.*` 配置、`gowebdav` 依赖、`media_archive` 任务、`media.archive` 审计、设置页图床块），C10 扩为"图片与附件都不入库、不上 CDN/对象存储"；原图**永久保留**（取消 30 天清理），「查看原图」改指同源 `/uploads/{key}/original.{ext}`；新增附件本地上传 `POST /attachments/upload`（multipart，落 `file.dir/{sha[:2]}/{sha256}{ext}`，按 sha256 去重）与附件安全黑名单（`415/2007`、`413/2008`），公开 `/attachments/{id}/go` 对本地附件直接下发（`octet-stream` + `Content-Disposition` + `nosniff` + Range）、对外链附件仍 302；新增 `GET /storage` 与 `POST /storage/cleanup`（占用统计、孤儿与缺失对账、孤儿清理）与 `DELETE /media/{id}/original`（删原图保变体）；`post_attachments` 增 `storage_key`/`mime`（migration 000003），`backup` 同时快照 `files/`，`cleanup` 不再动原图与附件 |
 | 1.12 | 2026-10-19 | D14 内容管理与运维闭环（M8）：`tags`/`series`/`links`/`redirects`/`attachments` 管理端 CRUD（`GET|POST /x`、`PUT|DELETE /x/{id}`，分类列表带未删除文章数、删分类不删文章）；公开 `GET /attachments/{id}/go`（302 + `clicks+1`）与公开边缘按 `redirects.from_path` 精确 301/302（`hits+1`）；`GET|PUT /settings` 只允许改 `imgBaseUrl` / `siteTimezone` 并强制 `content_version+1`，图床口令永不返回；管理端 `GET /jobs` 与 `GET /audit-logs` 分页；web 新增标签/系列/友链/跳转/附件/任务/审计/设置页 |
 | 1.11 | 2026-10-19 | D13 发布控制（M7）：新增 `POST /posts/{id}/schedule`（未来时间 → `scheduled` + 投递 `publish_scheduled` 任务，`unpublish`/回草稿撤任务）与 `POST /jobs`（手动投递 `cleanup`/`backup`/`link_check`）；`POST /posts/{id}/revisions/{rid}/restore` 回滚时**新写一条 revision**；预览链接改为一次性（首次访问写 `used_at`，之后或过期 = 410/2006），公开 `GET /preview/{token}` 为 `no-store`；§13 明确周期任务（backup 03:00 / cleanup 04:00 / link_check 周一 05:00，按站点时区，判据是当天是否已有同类型任务） |
 | 1.10 | 2026-10-19 | D12 互动与统计（M6）：公开 `POST|DELETE /posts/{slug}/like`（幂等、10 次/分钟/visitor）、`GET /posts/{slug}/stats`（`no-store`，访客态）、`POST /events/view`（PV 明细 + 同 visitor 同文章 10 分钟去重，UV 按上海日期 `COUNT(DISTINCT visitor_hash)` 重算，同时写 `stats_daily` 文章行与 `post_id=0` 全站行）；管理端 `GET /stats/overview` 与 `GET /stats/daily`；访客标识改为 `X-Visitor-Id` 请求头（缺失按 `ip|ua` 兜底），公开 HTML 与公开读接口不 `Set-Cookie`；§11 允许 `{width=…}` 图片尺寸属性；编辑器预览改用 `PostContent`（行内 `$x$` 出公式）、支持拖拽上传与图片框拖拽改宽 |

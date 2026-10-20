@@ -13,6 +13,7 @@ type ApiGroup struct {
 	Post    PostApi
 	Setting SettingApi
 	Stats   StatsApi
+	Storage StorageApi
 }
 
 // Group 是管理端接口聚合实例。

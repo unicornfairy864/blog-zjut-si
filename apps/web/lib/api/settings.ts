@@ -12,14 +12,10 @@ export interface AdminSettingsTask {
   intervalSeconds: number;
 }
 
-/** 图床配置（只读回显）；口令属于内部密钥，任何接口都不返回（agent.md §9）。 */
-export interface AdminSettingsCloudreve {
-  enabled: boolean;
-  webdavUrl: string;
-  username: string;
-  basePath: string;
-  publicBaseUrl: string;
-  archiveVariants: boolean;
+/** 附件存储配置（只读回显）：目录与单文件字节上限。 */
+export interface AdminSettingsFile {
+  dir: string;
+  maxBytes: number;
 }
 
 /** 数据库配置（只读回显）。 */
@@ -31,14 +27,15 @@ export interface AdminSettingsDb {
  * GET /api/admin/settings 的 data。
  *
  * 只有 `imgBaseUrl` 与 `siteTimezone` 可写，其余字段是运维排查用的只读回显。
+ * 图片与附件都由本站自己托管，各有一份目录与上限。
  */
 export interface AdminSettings {
   imgBaseUrl: string;
   siteTimezone: string;
   contentVersion: number;
   upload: AdminSettingsUpload;
+  file: AdminSettingsFile;
   task: AdminSettingsTask;
-  cloudreve: AdminSettingsCloudreve;
   db: AdminSettingsDb;
 }
 

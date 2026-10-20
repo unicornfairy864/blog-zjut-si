@@ -15,9 +15,14 @@ export interface MediaItem {
   blurhash: string;
   status: string;
   error: string;
+  /** 缩略图（默认 1600 档）；status 非 ready 时可能还没有真实文件。 */
   url: string;
-  /** 图床上的原图直链；未启用图床或尚未归档时为空串。 */
+  /** 本地原图直链（同源 /uploads/…）；原图已删除时为空串。 */
   origUrl: string;
+  /** 原图是否已被删除（只保留四档变体）。 */
+  origArchived: boolean;
+  /** 原图删除时间（Unix 秒）；没删过是 null。 */
+  origArchivedAt: number | null;
   variants: Record<string, string>;
   createdAt: number;
   updatedAt: number;
@@ -69,8 +74,20 @@ export const adminMediaApi = {
     return apiFetch<null>(`/api/admin/media/${id}`, { method: "DELETE" });
   },
 
-  /** 从本地原图重新生成变体。 */
+  /** 从本地原图重新生成变体；原图已删除时抛 ApiError(404)。 */
   retry(id: number) {
     return apiFetch<MediaItem>(`/api/admin/media/${id}/retry`, { json: {} });
+  },
+
+  /**
+   * 只删除本地原图，四档变体保留。
+   *
+   * 返回删除后的媒体条目（`origArchived` 为 true、`origUrl` 为空串）；
+   * 删掉后不能再用 retry 重新转码。
+   */
+  removeOriginal(id: number) {
+    return apiFetch<MediaItem>(`/api/admin/media/${id}/original`, {
+      method: "DELETE",
+    });
   },
 };

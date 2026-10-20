@@ -37,18 +37,26 @@ function describeSwitch(enabled: boolean): string {
   return enabled ? "启用" : "停用";
 }
 
+/** 把字节数写成"可读大小（原始字节）"，只读回显里两个口径都给，排查时不用换算。 */
+function describeBytes(bytes: number): string {
+  return `${formatBytes(bytes)}（${bytes} 字节）`;
+}
+
 /** 只读项按「运维排查时一起看」的关系分组。 */
 function buildReadonlyGroups(data: AdminSettings): ReadonlyGroup[] {
   return [
     {
-      title: "内容与上传",
+      title: "内容",
+      rows: [{ label: "内容版本", value: String(data.contentVersion) }],
+    },
+    {
+      // 图片与附件都由本站托管：两个目录、两个上限，改不了，只能看。
+      title: "存储",
       rows: [
-        { label: "内容版本", value: String(data.contentVersion) },
-        { label: "上传目录", value: data.upload.dir },
-        {
-          label: "单文件上限",
-          value: `${formatBytes(data.upload.maxBytes)}（${data.upload.maxBytes} 字节）`,
-        },
+        { label: "图片目录", value: data.upload.dir },
+        { label: "图片上限", value: describeBytes(data.upload.maxBytes) },
+        { label: "附件目录", value: data.file.dir },
+        { label: "附件上限", value: describeBytes(data.file.maxBytes) },
       ],
     },
     {
@@ -56,20 +64,6 @@ function buildReadonlyGroups(data: AdminSettings): ReadonlyGroup[] {
       rows: [
         { label: "调度开关", value: describeSwitch(data.task.enabled) },
         { label: "扫描周期", value: `${data.task.intervalSeconds} 秒` },
-      ],
-    },
-    {
-      title: "图床（Cloudreve）",
-      rows: [
-        { label: "开关", value: describeSwitch(data.cloudreve.enabled) },
-        { label: "WebDAV", value: data.cloudreve.webdavUrl || "—" },
-        { label: "账号", value: data.cloudreve.username || "—" },
-        { label: "归档目录", value: data.cloudreve.basePath || "—" },
-        { label: "匿名直出前缀", value: data.cloudreve.publicBaseUrl || "—" },
-        {
-          label: "归档变体",
-          value: describeSwitch(data.cloudreve.archiveVariants),
-        },
       ],
     },
     {

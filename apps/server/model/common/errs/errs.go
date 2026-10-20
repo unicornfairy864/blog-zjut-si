@@ -23,6 +23,8 @@ const (
 	ErrorSlugImmutable  = 2004
 	ErrorLoginLocked    = 2005
 	ErrorPreviewExpired = 2006
+	ErrorFileRejected   = 2007
+	ErrorFileTooLarge   = 2008
 )
 
 // httpStatusByCode 是 §5 的错误码 → HTTP 状态映射。
@@ -43,6 +45,8 @@ var httpStatusByCode = map[int]int{
 	ErrorSlugImmutable:  409,
 	ErrorLoginLocked:    423,
 	ErrorPreviewExpired: 410,
+	ErrorFileRejected:   415,
+	ErrorFileTooLarge:   413,
 }
 
 // HTTPStatus 返回 code 对应的 HTTP 状态码；未知 code 归 500。

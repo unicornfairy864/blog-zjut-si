@@ -633,11 +633,19 @@ func (s ContentService) Attachments(postID int64, page, pageSize int) ([]model.P
 	return items, total, nil
 }
 
-// CreateAttachment 新建附件：postId 必须指向未删除的文章，shareUrl 必须是 http(s)（§5）。
+// CreateAttachment 新建外链附件：postId 必须指向未删除的文章，shareUrl 必须是 http(s)（§5）。
+//
+// 本地上传的附件走 POST /api/admin/attachments/upload（ContentService.UploadAttachment），
+// 因此这里明确要求 shareUrl 非空，避免建出既没有文件也没有外链的空壳。
 func (s ContentService) CreateAttachment(in AttachmentInput, actor PostActor) (*model.PostAttachment, error) {
 	values := resolveAttachmentValues(in, model.PostAttachment{})
 	if fields := validateAttachmentValues(values); len(fields) > 0 {
 		return nil, contentFieldError(fields)
+	}
+	if values.ShareURL == "" {
+		return nil, contentFieldError([]request.FieldError{
+			{Field: "shareUrl", Message: "外链附件必须填 shareUrl；本地附件请用 /attachments/upload"},
+		})
 	}
 	if err := ensurePostExists(values.PostID); err != nil {
 		return nil, err
@@ -721,7 +729,7 @@ func (s ContentService) UpdateAttachment(id int64, in AttachmentInput, actor Pos
 	return model.FindAttachmentByID(global.DB, id)
 }
 
-// DeleteAttachment 删除附件。
+// DeleteAttachment 删除附件；本地上传的文件在确认没人再引用后一并删掉（§10）。
 func (s ContentService) DeleteAttachment(id int64, actor PostActor) error {
 	item, err := model.FindAttachmentByID(global.DB, id)
 	if err != nil {
@@ -735,9 +743,12 @@ func (s ContentService) DeleteAttachment(id int64, actor PostActor) error {
 		Action:     AuditActionAttachmentDelete,
 		TargetType: "attachment",
 		TargetID:   strconv.FormatInt(id, 10),
-		Meta:       map[string]any{"postId": item.PostID, "title": item.Title},
+		Meta:       map[string]any{"postId": item.PostID, "title": item.Title, "fileName": item.FileName},
 		IP:         actor.IP,
 	})
+	if item.StorageKey != "" {
+		s.PurgeUnreferencedAttachmentFiles([]string{item.StorageKey})
+	}
 	return nil
 }
 
@@ -750,8 +761,14 @@ func (s ContentService) AttachmentByID(id int64) (*model.PostAttachment, error) 
 	return item, nil
 }
 
-// SettingsUpload 是上传目录与大小上限（只读回显，来自进程配置）。
+// SettingsUpload 是图片目录与大小上限（只读回显，来自进程配置）。
 type SettingsUpload struct {
+	Dir      string `json:"dir"`
+	MaxBytes int64  `json:"maxBytes"`
+}
+
+// SettingsFile 是附件目录与大小上限（只读回显，来自进程配置）。
+type SettingsFile struct {
 	Dir      string `json:"dir"`
 	MaxBytes int64  `json:"maxBytes"`
 }
@@ -762,16 +779,6 @@ type SettingsTask struct {
 	IntervalSeconds int  `json:"intervalSeconds"`
 }
 
-// SettingsCloudreve 是图床归档配置（只读回显，口令永不返回，§9）。
-type SettingsCloudreve struct {
-	Enabled         bool   `json:"enabled"`
-	WebDAVURL       string `json:"webdavUrl"`
-	Username        string `json:"username"`
-	BasePath        string `json:"basePath"`
-	PublicBaseURL   string `json:"publicBaseUrl"`
-	ArchiveVariants bool   `json:"archiveVariants"`
-}
-
 // SettingsDB 是数据库文件路径（只读回显）。
 type SettingsDB struct {
 	Path string `json:"path"`
@@ -779,13 +786,13 @@ type SettingsDB struct {
 
 // SettingsView 是 GET /api/admin/settings 的输出（§5）。
 type SettingsView struct {
-	ImgBaseURL     string            `json:"imgBaseUrl"`
-	SiteTimezone   string            `json:"siteTimezone"`
-	ContentVersion int64             `json:"contentVersion"`
-	Upload         SettingsUpload    `json:"upload"`
-	Task           SettingsTask      `json:"task"`
-	Cloudreve      SettingsCloudreve `json:"cloudreve"`
-	DB             SettingsDB        `json:"db"`
+	ImgBaseURL     string         `json:"imgBaseUrl"`
+	SiteTimezone   string         `json:"siteTimezone"`
+	ContentVersion int64          `json:"contentVersion"`
+	Upload         SettingsUpload `json:"upload"`
+	File           SettingsFile   `json:"file"`
+	Task           SettingsTask   `json:"task"`
+	DB             SettingsDB     `json:"db"`
 }
 
 // SettingsUpdate 是设置更新入参；nil 表示不修改（§5：只允许改这两项）。
@@ -820,17 +827,13 @@ func (s ContentService) Settings() (SettingsView, error) {
 			Dir:      global.Config.Upload.Dir,
 			MaxBytes: global.Config.Upload.MaxBytes,
 		},
+		File: SettingsFile{
+			Dir:      global.Config.File.Dir,
+			MaxBytes: global.Config.File.MaxBytes,
+		},
 		Task: SettingsTask{
 			Enabled:         global.Config.Task.Enabled,
 			IntervalSeconds: global.Config.Task.IntervalSeconds,
-		},
-		Cloudreve: SettingsCloudreve{
-			Enabled:         global.Config.Cloudreve.Enabled,
-			WebDAVURL:       global.Config.Cloudreve.WebDAVURL,
-			Username:        global.Config.Cloudreve.Username,
-			BasePath:        global.Config.Cloudreve.BasePath,
-			PublicBaseURL:   global.Config.Cloudreve.PublicBaseURL,
-			ArchiveVariants: global.Config.Cloudreve.ArchiveVariants,
 		},
 		DB: SettingsDB{Path: global.Config.DB.Path},
 	}, nil
@@ -1137,6 +1140,9 @@ func resolveAttachmentValues(in AttachmentInput, current model.PostAttachment) a
 }
 
 // validateAttachmentValues 校验附件的有效值（§5）。
+//
+// shareUrl 允许为空：本地上传的附件（走 /attachments/upload）不填外链地址，
+// 但只要填了就必须是 http(s)。
 func validateAttachmentValues(values attachmentValues) []request.FieldError {
 	fields := make([]request.FieldError, 0, 6)
 
@@ -1147,11 +1153,9 @@ func validateAttachmentValues(values attachmentValues) []request.FieldError {
 		fields = append(fields, request.FieldError{Field: "title", Message: "标题长度必须在 1–200 个字符之间"})
 	}
 	switch {
-	case values.ShareURL == "":
-		fields = append(fields, request.FieldError{Field: "shareUrl", Message: "不能为空"})
 	case utf8.RuneCountInString(values.ShareURL) > attachmentShareURLMaxLen:
 		fields = append(fields, request.FieldError{Field: "shareUrl", Message: "不能超过 500 个字符"})
-	case !isHTTPURL(values.ShareURL):
+	case values.ShareURL != "" && !isHTTPURL(values.ShareURL):
 		fields = append(fields, request.FieldError{Field: "shareUrl", Message: "必须以 http:// 或 https:// 开头"})
 	}
 	if utf8.RuneCountInString(values.FileName) > attachmentFileNameMaxLen {

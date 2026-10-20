@@ -132,6 +132,20 @@ func (MediaApi) Retry(c *gin.Context) {
 	response.OkWithDetailed(c, item, "已重新处理")
 }
 
+// RemoveOriginal 处理 DELETE /api/admin/media/{id}/original：只删原图，保留四档变体（§10）。
+func (MediaApi) RemoveOriginal(c *gin.Context) {
+	id, ok := mediaID(c)
+	if !ok {
+		return
+	}
+	item, err := service.ServiceGroupApp.Media.RemoveOriginal(id, actorFrom(c))
+	if err != nil {
+		response.FailWithError(c, err)
+		return
+	}
+	response.OkWithDetailed(c, item, "原图已删除，四档变体保留")
+}
+
 // mediaID 解析路径里的媒体主键；非法时直接写出 400。
 func mediaID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

@@ -22,21 +22,17 @@ services:
       BLOG_WEB_UPSTREAM: "http://127.0.0.1:3000"
       BLOG_DB_PATH: "/data/blog/db/blog.db"
       BLOG_UPLOAD_DIR: "/data/blog/uploads"
+      # 附件目录：只经 /api/attachments/{id}/go 下发，不做静态直出。
+      BLOG_FILE_DIR: "/data/blog/files"
+      BLOG_FILE_MAX_BYTES: "${BLOG_FILE_MAX_BYTES:-20971520}"
       BLOG_LOG_LEVEL: "${BLOG_LOG_LEVEL:-info}"
       # 首次启动且 admins 表为空时创建账号；建好后可从此处删除。
       BLOG_ADMIN_USERNAME: "${BLOG_ADMIN_USERNAME:-}"
       BLOG_ADMIN_PASSWORD: "${BLOG_ADMIN_PASSWORD:-}"
-      # 图床（Cloudreve WebDAV）：原图与四档变体归档；不启用时跳过归档。
-      BLOG_CLOUDREVE_ENABLED: "${BLOG_CLOUDREVE_ENABLED:-false}"
-      BLOG_CLOUDREVE_WEBDAV_URL: "${BLOG_CLOUDREVE_WEBDAV_URL:-}"
-      BLOG_CLOUDREVE_USERNAME: "${BLOG_CLOUDREVE_USERNAME:-}"
-      BLOG_CLOUDREVE_PASSWORD: "${BLOG_CLOUDREVE_PASSWORD:-}"
-      BLOG_CLOUDREVE_BASE_PATH: "${BLOG_CLOUDREVE_BASE_PATH:-/blog}"
-      BLOG_CLOUDREVE_PUBLIC_BASE_URL: "${BLOG_CLOUDREVE_PUBLIC_BASE_URL:-}"
-      BLOG_CLOUDREVE_ARCHIVE_VARIANTS: "${BLOG_CLOUDREVE_ARCHIVE_VARIANTS:-true}"
     volumes:
       - /data/blog/db:/data/blog/db
       - /data/blog/uploads:/data/blog/uploads
+      - /data/blog/files:/data/blog/files
     logging:
       driver: json-file
       options:

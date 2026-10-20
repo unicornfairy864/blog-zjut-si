@@ -39,7 +39,7 @@
           "sha256": "786a8d…", "ext": "jpg", "width": 2400, "height": 1200,
           "alt": "示例图", "blurhash": "L6Pj0^…",
           "url": "/uploads/78/786a8d…/1600.webp",
-          "origUrl": "https://pan.example.com/public/blog/786a8d….jpg",
+          "origUrl": "/uploads/78/786a8d…/original.jpg",
           "variants": { "480": "…/480.webp", "960": "…/960.webp", "1600": "…/1600.webp", "2400": "…/2400.webp" }
         },
         "tags": [{ "name": "Go", "slug": "go" }]
@@ -60,10 +60,9 @@
 在列表项字段之外，详情还带 `contentHtml`、`seoTitle`、`seoDescription`、`canonicalUrl`、`lang`、
 `allowComments`（false 时前端不显示评论表单）、`prev` / `next`（按 `published_at` 相邻，仅 published，边界为 `null`）。
 
-配了 `cloudreve.public_base_url` 时，`contentHtml` 里的本站图片会在返回时被包上一层
-「查看原图」链接（`<a class="media-orig" href="{public_base_url}/{sha256}.{ext}" target="_blank"
-rel="noopener noreferrer">`）；图床未启用、图片未归档时原样返回，所以 `contentHtml` 的内容会随
-归档进度变化（ETag 按最终响应体计算，不会出现脏缓存）。
+`contentHtml` 里的本站图片会在返回时被包上一层「查看原图」链接（`<a class="media-orig"
+href="{img_base_url}/{storage_key}/original.{ext}" target="_blank" rel="noopener noreferrer">`）；
+该图的原图被管理端手动删掉（`orig_archived`）时原样返回、不给链接。
 
 同一处还会给正文里的本站图片补 `srcset`（该图的四档变体，不足两档不输出）、`sizes`、
 `width`/`height` 与 `loading="lazy" decoding="async"`；`media` 表里查不到的图片原样保留。
@@ -294,7 +293,7 @@ PV 打点。请求体：
 ```json
 {
   "code": 0,
-  "data": { "list": [{ "id": 1, "name": "Cloudreve", "url": "https://pan.zjut.si", "avatar": "", "description": "" }] },
+  "data": { "list": [{ "id": 1, "name": "示例友链", "url": "https://example.com", "avatar": "", "description": "" }] },
   "msg": "操作成功"
 }
 ```
@@ -454,9 +453,55 @@ PV 打点。请求体：
 
 ```json
 // GET /api/admin/attachments  →  data.list[]
-{ "id": 5, "postId": 3, "title": "源码", "shareUrl": "https://…", "fileName": "src.zip",
-  "bytes": 1024, "sha256": "", "version": "v1", "sort": 0, "clicks": 12, "createdAt": 1760000000 }
+{ "id": 5, "postId": 3, "title": "源码", "shareUrl": "", "fileName": "src.zip",
+  "bytes": 1048576, "sha256": "3f9a…", "version": "v1", "sort": 0, "clicks": 12,
+  "storageKey": "3f/3f9a…zip", "mime": "application/zip", "createdAt": 1760000000 }
 ```
+
+`storageKey` 非空表示**本地上传**（物理文件 `{file.dir}/{storageKey}`），为空表示**外链**（按 `shareUrl` 302）。
+`POST /api/admin/attachments`（JSON）只用于外链，`shareUrl` 留空 → `400 / 1003`；本地文件走下面的上传端点。
+
+### 附件上传与下载
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /api/admin/attachments/upload` | `multipart/form-data`：`file`（必填）、`postId`（必填）、`title`（可选，默认取去掉扩展名的文件名）、`version`、`sort`；按内容 sha256 去重 |
+| `GET /api/attachments/{id}/go` | 公开下载出口：本地的直接下发，外链的 `302` 到 `shareUrl`；两种情况都 `clicks+1`、`no-store` |
+
+上传失败：
+
+| HTTP | code | 场景 |
+| --- | --- | --- |
+| 400 | 1003 | 缺 `file` / `postId` 非法 / `sort` 非法 / `title` 超长 |
+| 413 | 2008 | 超过 `file.max_bytes`（默认 20MB） |
+| 415 | 2007 | 扩展名或文件名命中安全黑名单（`php`/`jsp`/`exe`/`html`/`svg`/`js`… 与隐藏文件） |
+
+本地下发的响应头固定为 `Content-Type: application/octet-stream`、
+`Content-Disposition: attachment; filename="…"; filename*=UTF-8''…`、`X-Content-Type-Options: nosniff`，
+并支持 `Range`（断点续传）；文件丢失 → `410 / 1007`，记录不存在 → `404 / 1002`。
+
+### 存储管理
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/admin/storage` | 磁盘占用统计 + 孤儿文件（磁盘有、库里无）+ 缺失文件（库里有、磁盘无） |
+| `POST /api/admin/storage/cleanup` | 删除孤儿文件，返回 `{removedFiles,removedBytes,failedFiles}` |
+| `DELETE /api/admin/media/{id}/original` | 只删原图、保留四档变体，置 `origArchived=1`（此后不能 `retry`） |
+
+```json
+// GET /api/admin/storage  →  data
+{
+  "uploadDir": "/data/blog/uploads", "fileDir": "/data/blog/files",
+  "mediaCount": 12, "originalBytes": 10485760, "variantBytes": 3145728, "originalsRemoved": 2,
+  "attachmentCount": 5, "attachmentBytes": 2097152, "linkedAttachmentCount": 4, "totalBytes": 15728640,
+  "orphanCount": 3, "orphanBytes": 81920, "missingCount": 1,
+  "orphans": [ { "path": "ab/abcd…/960.webp", "bytes": 40960, "kind": "variant" } ],
+  "missing": [ { "kind": "original", "storageKey": "ab/abcd…", "mediaId": 3 } ]
+}
+```
+
+`kind` ∈ `original` / `variant` / `attachment`；清单最多 200（孤儿）/ 100（缺失）条，计数是全量。
+清理只删孤儿，**不碰**缺失文件与任何在用的原图、变体、附件。
 
 公开边缘还会按 `redirects.from_path` 精确匹配：命中就 `301/302` 到 `to_path` 并 `hits+1`，
 不落 Next（所以改 slug 后老链接不会 404）。
@@ -473,10 +518,8 @@ PV 打点。请求体：
 {
   "imgBaseUrl": "", "siteTimezone": "Asia/Shanghai", "contentVersion": 7,
   "upload": { "dir": "/data/blog/uploads", "maxBytes": 31457280 },
+  "file": { "dir": "/data/blog/files", "maxBytes": 20971520 },
   "task": { "enabled": true, "intervalSeconds": 60 },
-  "cloudreve": { "enabled": true, "webdavUrl": "https://pan.example.com/dav",
-                 "username": "…", "basePath": "/blog", "publicBaseUrl": "https://pan.example.com/public/blog",
-                 "archiveVariants": true },
   "db": { "path": "/data/blog/db/blog.db" }
 }
 ```
@@ -492,7 +535,8 @@ PV 打点。请求体：
 | `POST /api/admin/media` | `multipart/form-data`：`alt`（可选，必须排在 `file` 前）+ `file`；≤30MB、≤5000 万像素；内容 sha256 去重 |
 | `GET /api/admin/media` | 媒体库分页，按创建时间倒序 |
 | `DELETE /api/admin/media/{id}` | 未被引用才删除；被引用返回 `409 / 2002` 与引用清单 |
-| `POST /api/admin/media/{id}/retry` | 从本地原图重新生成变体 |
+| `POST /api/admin/media/{id}/retry` | 从本地原图重新生成变体；原图已被删（`origArchived`）时 `404 / 1002` |
+| `DELETE /api/admin/media/{id}/original` | 只删原图、保留四档变体（见「存储管理」） |
 
 上传成功（`data`）：
 
@@ -502,7 +546,8 @@ PV 打点。请求体：
   "bytes": 177841, "width": 2400, "height": 1200, "pixels": 2880000,
   "alt": "示例图", "blurhash": "L6Pj0^…", "status": "ready", "error": "",
   "url": "/uploads/78/786a8d…/1600.webp",
-  "origUrl": "https://pan.example.com/public/blog/786a8d….jpg",
+  "origUrl": "/uploads/78/786a8d…/original.jpg",
+  "origArchived": false, "origArchivedAt": null,
   "variants": {
     "480": "/uploads/78/786a8d…/480.webp",
     "960": "/uploads/78/786a8d…/960.webp",
@@ -516,9 +561,8 @@ PV 打点。请求体：
 上传立即返回 `status: "processing"`，后台任务生成四档 WebP 与 blurhash 后变 `ready`；
 客户端轮询 `GET /api/admin/media` 即可。`failed` 时 `error` 有原因、可 `retry`。
 
-`origUrl` 是图床上的原图直链，只有图床启用、配置了 `cloudreve.public_base_url`、且该图
-归档完成时才非空；否则是空串。它要求图床存储策略的「文件名规则」为 `{originname}`
-（见 `docs/runbook.md` §11.5）。
+`origUrl` 是同源原图直链（`{img_base_url}/{storage_key}/original.{ext}`，原图永久保留）；
+管理端删掉原图后 `origArchived=true`、`origUrl` 为空串，`retry` 也会失败（原图是重新转码的唯一来源）。
 
 `img_base_url` 为空时 URL 是相对路径 `/uploads/…`（公开站由 nginx 直出；
 管理端 8641 直出 `/uploads/*` 供媒体库与编辑器预览）。

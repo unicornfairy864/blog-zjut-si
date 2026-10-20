@@ -70,7 +70,6 @@ func Run() {
 		handlers := map[string]task.Handler{
 			model.JobTypePublishScheduled: service.ServiceGroupApp.Task.HandlePublishScheduled,
 			model.JobTypeMediaProcess:     service.ServiceGroupApp.Media.HandleProcess,
-			model.JobTypeMediaArchive:     service.ServiceGroupApp.Media.HandleArchive,
 			model.JobTypeLinkCheck:        service.ServiceGroupApp.Task.HandleLinkCheck,
 			model.JobTypeBackup:           service.ServiceGroupApp.Task.HandleBackup,
 			model.JobTypeCleanup:          service.ServiceGroupApp.Task.HandleCleanup,
