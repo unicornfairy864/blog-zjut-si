@@ -2,8 +2,10 @@
 package request
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/go-playground/validator/v10"
 )
@@ -61,11 +63,15 @@ var validatorMessages = map[string]string{
 	"number":   "必须是数字",
 }
 
-// ValidationDetails 把 binding 校验错误转成稳定的字段错误数组；非校验错误返回 nil。
+// ValidationDetails 把 binding 校验错误转成稳定的字段错误数组。
+//
+// 除了字段级校验，还要解释"请求体根本没解析成功"这一类问题：JSON 语法错误、
+// 字段类型不匹配（比如数字字段传了字符串）、请求体为空。不处理的话前端只能看到
+// 一句「参数校验失败」而 data 是 null，无从下手。
 func ValidationDetails(err error) any {
 	var verr validator.ValidationErrors
 	if !errors.As(err, &verr) {
-		return nil
+		return bodyErrorDetails(err)
 	}
 	fields := make([]FieldError, 0, len(verr))
 	for _, fe := range verr {
@@ -76,4 +82,35 @@ func ValidationDetails(err error) any {
 		fields = append(fields, FieldError{Field: fe.Field(), Message: msg})
 	}
 	return fields
+}
+
+// bodyErrorDetails 解释 JSON 解析失败的原因；认识的错误返回单元素字段数组，其余返回 nil。
+//
+// Field 用 JSON 里的字段名（如 coverMediaId），比 Go 结构体字段名更贴近前端。
+func bodyErrorDetails(err error) any {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		field := typeErr.Field
+		if field == "" {
+			field = "body"
+		}
+		return []FieldError{{
+			Field:   field,
+			Message: "类型不匹配（应为 " + typeErr.Type.String() + "）",
+		}}
+	}
+
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return []FieldError{{
+			Field:   "body",
+			Message: fmt.Sprintf("JSON 格式错误（第 %d 字节附近），检查引号、逗号与括号", syntaxErr.Offset),
+		}}
+	}
+
+	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return []FieldError{{Field: "body", Message: "请求体为空或不是合法 JSON"}}
+	}
+	return nil
 }
