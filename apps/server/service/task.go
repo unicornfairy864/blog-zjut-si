@@ -294,11 +294,9 @@ func (s TaskService) HandleLinkCheck(ctx context.Context, _ *model.Job) error {
 		if checked >= linkCheckMaxURLs {
 			break
 		}
+		// 一个外链都没有时也要往下走：ReplaceLinkChecks 先删后插，空列表正好把这篇文章的
+		// 历史记录清空；早先这里 `continue`，正文里删掉的坏链会永远留在任务页上。
 		targets := extractCheckTargets(posts[i].ContentHTML)
-		if len(targets) == 0 {
-			continue
-		}
-
 		items := make([]model.LinkCheck, 0, len(targets))
 		now := dbtime.Now()
 		for _, target := range targets {

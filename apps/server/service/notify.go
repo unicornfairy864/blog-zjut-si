@@ -719,6 +719,11 @@ func (s NotifyService) state() (notifyState, error) {
 	if err := json.Unmarshal([]byte(setting.ValueJSON), &state); err != nil {
 		return notifyState{}, fmt.Errorf("解析告警状态失败: %w", err)
 	}
+	// 库里存着字面量 null 时 json.Unmarshal 会把 map 置成 nil，后续 `state[key] = …`
+	// 会 panic（巡检在 errgroup 的 goroutine 里跑，panic 会拖垮整个进程）。
+	if state == nil {
+		state = notifyState{}
+	}
 	return state, nil
 }
 

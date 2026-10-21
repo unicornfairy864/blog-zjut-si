@@ -508,6 +508,9 @@ func viewCountOf(post *model.Post) *int64 {
 }
 
 // referrerHostOf 只保留 referrer 的 host（§4：page_views 不存完整 URL）。
+//
+// host 统一小写：DNS 域名本身大小写不敏感，不归一的话 `Example.com` 与 `example.com`
+// 会被当成两个来源，来源统计凭空多一份。
 func referrerHostOf(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -517,5 +520,5 @@ func referrerHostOf(raw string) string {
 	if err != nil {
 		return ""
 	}
-	return truncateRunes(parsed.Hostname(), statsReferrerHostMaxLen)
+	return truncateRunes(strings.ToLower(parsed.Hostname()), statsReferrerHostMaxLen)
 }

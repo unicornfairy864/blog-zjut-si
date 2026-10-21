@@ -63,7 +63,9 @@ export function PostContent({ html, className }: PostContentProps) {
       };
 
       button.addEventListener("click", onClick);
-      block.appendChild(button);
+      // 有文件名标签的代码块把按钮放进 figure：它落位在标题行右上角（§11）。
+      const host = block.closest<HTMLElement>("figure.code-block") ?? block;
+      host.appendChild(button);
       cleanups.push(() => {
         button.removeEventListener("click", onClick);
         button.remove();

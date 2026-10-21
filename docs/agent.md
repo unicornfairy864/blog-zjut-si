@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.15**（2026-10-21 D15 SEO：sitemap / RSS / JSON-LD / OG，见 §11 与 §22）
+> 版本：**v1.18**（2026-10-21 D18 测试补齐 + 覆盖率门禁 + 代码块文件名标签，并修掉写测试时挖出的 9 处缺陷，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -268,7 +268,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | --- | --- |
 | 点赞 | `likes` 主键 `(post_id, visitor_hash)`；`POST /posts/{slug}/like` 幂等（已赞不重复计数），`DELETE` 幂等取消；`posts.like_count` 每次变更后按 `SELECT COUNT(*) FROM likes WHERE post_id=?` 重算 |
 | 点赞限流 | **10 次 / 分钟 / visitor**，键为 `visitor_hash`（`utils.HashVisitor`），超限 `code 1005` |
-| PV 明细 | 每次 `POST /events/view` 写一行 `page_views`（`post_id` 可为 NULL、`path`、`visitor_hash`、`referrer_host`），明细保留 90 天由 `cleanup` 裁剪 |
+| PV 明细 | 每次 `POST /events/view` 写一行 `page_views`（`post_id` 可为 NULL、`path`、`visitor_hash`、`referrer_host`），明细保留 90 天由 `cleanup` 裁剪。`referrer_host` 只留 host 并**统一小写**（域名大小写不敏感，不归一会把同一个来源算成两份） |
 | PV 去重 | **同 visitor 同文章 10 分钟内只 +1**（去重键：文章页用 `post_id`，非文章页用 `path`）；重复打点返回 `recorded:false`，不写计数 |
 | 计数落点 | 计入时 `posts.view_count+1`，并同时 upsert `stats_daily` 的**文章行**与 `post_id=0` **全站行** |
 | UV | 不增量近似：按上海日期 `COUNT(DISTINCT visitor_hash)` 重算该日两行的 `uv` |
@@ -280,7 +280,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 
 | 项 | 规则 |
 | --- | --- |
-| 定时发布 | `POST /posts/{id}/schedule`（`publishedAt` 必须是未来时间）→ 落 `scheduled` 并投递 `publish_scheduled` 任务（`run_at = publishedAt`，payload `{postId}`）；重复调用会先撤掉该文待执行的同类任务 |
+| 定时发布 | `POST /posts/{id}/schedule`（`publishedAt` 必须是未来时间）→ 落 `scheduled` 并投递 `publish_scheduled` 任务（`run_at = publishedAt`，payload `{postId}`）；重复调用会先撤掉该文待执行的同类任务。**只有 `draft` 能定时**：`published` 调用 → `code 1004`（§6 状态机里没有这条边，放行会把文章从公开端撤下并改写原发布时间，要重新定时必须先取消发布），`archived` → `code 1004` |
 | 到点生效 | 任务执行时再判一次：`status=scheduled` 且 `published_at <= now` 才发布，否则跳过（用户可能已取消定时）；发布逻辑与手动 `publish` 完全同源（写 revision、重算渲染、revision+1） |
 | 取消定时 | `POST /posts/{id}/unpublish` 与 PATCH 回 `draft` 都撤掉待执行的 `publish_scheduled` 任务 |
 | 版本回滚 | `POST /posts/{id}/revisions/{rid}/restore`：用旧版本内容覆盖正文，并**再写一条新 revision**（`revision+1`，note 记来源），历史不被改写 |
@@ -300,7 +300,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 编辑器回显 | 管理端详情另出 `cover` / `ogImage`（`{id,url,alt,width,height}`，由 service 按外键补齐），供编辑器显示已选封面；外键指向的图已被删除时为 `null`（不报错） |
 | 友链 CRUD | `GET|POST /links`、`PUT|DELETE /links/{id}`；`status` 只有 `active`/`hidden`，公开端只出 `active` |
 | 跳转 CRUD | `GET|POST /redirects`、`PUT|DELETE /redirects/{id}`；`status` 只有 301/302，`fromPath` 唯一且必须以 `/` 开头（≤200），`toPath` 必须以 `/` 开头或 `http(s)://` 开头（≤500）；**公开边缘按 `from_path` 精确匹配直接 301/302 并 `hits+1`**（在转 Next 之前处理） |
-| 附件 | `GET|POST /attachments`、`POST /attachments/upload`、`PUT|DELETE /attachments/{id}`；JSON 创建只用于**外链**（`shareUrl` 必填且是 http(s)，留空 → `code 1003`），本地文件走 `POST /attachments/upload`（multipart：`file`、`postId`、可选 `title`/`version`/`sort`，`title` 默认取去掉扩展名的文件名） |
+| 附件 | `GET|POST /attachments`、`POST /attachments/upload`、`PUT|DELETE /attachments/{id}`；JSON 创建只用于**外链**（`shareUrl` 必填且是 http(s)，留空 → `code 1003`），本地文件走 `POST /attachments/upload`（multipart：`file`、`postId`、可选 `title`/`version`/`sort`，`title` 默认取去掉扩展名的文件名）。`PUT` 同一条口径：把外链附件的 `shareUrl` 清空（且记录没有 `storage_key`）→ `code 1003`，不允许留下"既没有外链地址也没有本地文件"的空壳；本地附件（有 `storage_key`）不受影响 |
 | 附件安全 | 用**黑名单**拦扩展名与固定文件名（服务端脚本、可执行文件、浏览器会当页面渲染的 `html/svg/xml` 等，见 §10），命中 → `code 2007`；超过 `file.max_bytes` → `code 2008`；隐藏文件（`.` 开头）一律拒绝 |
 | 附件下载 | 公开 `GET /attachments/{id}/go`：本地的直接下发（`application/octet-stream` + `Content-Disposition: attachment` + `nosniff`，支持 Range），外链的 `302` 到 `share_url`；两种情况都 `clicks+1`、`no-store`；记录不存在 → `code 1002`，文件丢了 → `code 1007` |
 | 存储管理 | `GET /storage`：占用统计（原图/变体/附件/合计）+ 孤儿文件（磁盘有、库里无）+ 缺失文件（库里有、磁盘无）+ 已删原图数，清单各截断到 200/100 条但计数是全量；`POST /storage/cleanup` 只删孤儿，返回 `{removedFiles,removedBytes,failedFiles}` |
@@ -337,6 +337,8 @@ draft ──publish──▶ published ──archive──▶ archived
 ```
 
 - `scheduled` 必须满足 `published_at > now`
+- `schedule` 只接受 `draft`：`published` 与 `archived` 都返回 `code 1004`（要重新定时必须先 `unpublish`）。
+  放行 `published → scheduled` 会把文章从公开端撤下来、还会改写原发布时间，等于"排期即下线"
 - 已发布文章 `slug` 不可变；确需修改时必须同时写 `redirects`，否则 `code 2004`
 - 每次 publish：`revision+1`、写 `post_revisions`、重算 `content_html/content_text/word_count/reading_time`
 - 已发布文章再次 publish：**内容与最新版本一致时按「重复发布」返回 `code 1004`**；
@@ -402,7 +404,7 @@ pending ─lock─▶ running ─ok─▶ done
 | 时间 | 仅用 `time.Time` 在内存中，落库前转 Unix 秒（统一 `dbtime.Unix` 类型） |
 | 并发 | 共享可变状态必须加锁；任务 worker 单实例；用 `errgroup`，禁止裸 `go func()` |
 | 事务 | `global.DB.Transaction(func(tx *gorm.DB) error {...})`，tx 透传，service 发起 |
-| 测试 | 表驱动 + `t.Parallel()`；service 覆盖率 ≥70%；每个 API 至少 happy path + 错误路径 |
+| 测试 | 表驱动；service 覆盖率 ≥70%（`make cover` 卡门禁）；每个 API 至少 happy path + 错误路径；`t.Parallel()` 只给不碰 `global.DB` 的纯函数用——DB 用例共享进程级 `global.DB`，并行会互相踩数据 |
 | Lint | `gofmt` + `goimports` + `golangci-lint`（`govet,errcheck,staticcheck,revive,gosec,bodyclose,unparam`） |
 | 注释 | 导出符号必须注释；标识符英文，注释中文 |
 
@@ -480,7 +482,7 @@ apps/web/
 | 面 | 规定 |
 | --- | --- |
 | 密码 | argon2id；密码 ≥16 位；不落日志 |
-| 登录 | 5 次失败/10min 锁定 30min；失败写 `audit_logs` + `login_attempts` |
+| 登录 | 5 次失败/10min 锁定 30min；失败写 `audit_logs` + `login_attempts`。`login_attempts` 按 `(key,kind)` 唯一：**窗口过期时在同一行上重新计数**（`count=1`、刷新 `window_start`、清掉过期的 `locked_until`），绝不能改成 INSERT 新行——唯一索引会让整笔事务回滚，计数再也涨不上去、锁定形同虚设 |
 | 锁定键 | **按用户名计数**。管理端经隧道访问，来源 IP 恒为回环/网关，按 IP 计数无意义；`ip_hash` 只用于审计 |
 | 会话 | `sid` cookie：`HttpOnly` `SameSite=Strict` `Path=/`，不设 `Secure`（走 http://localhost）；7 天滑动过期；改密即全端失效 |
 | CSRF | 双提交：`GET /auth/me` 返回明文 `csrf_token`，服务端存 `csrf_hash`；写请求带 `X-CSRF-Token` |
@@ -532,6 +534,9 @@ apps/web/
 - 禁止把附件目录直接 alias 给 nginx：附件必须经 `/go` 出口，才能保证 `Content-Disposition: attachment`
   + `Content-Type: application/octet-stream` + `nosniff`（任何扩展名都不会被浏览器当页面渲染）
 - `media` 表永不存 URL，只存 `storage_key` + `variants_json`
+- **主图 URL 的选档顺序固定**：`1600` → `2400` → `960` → `480`（缺档时退到更大的档，浏览器等比缩小不会失真）。
+  四档都没有（`processing`）时给 `1600` 的预期地址，由前端按 `status` 决定是否展示。
+  优先级表里一个都不匹配时按档名排序取第一个——**不允许依赖 map 遍历顺序**，否则同一份数据每次请求会返回不同 URL
 - 「查看原图」指向**本地原图**：公开详情返回的 `contentHtml` 会给本站图片包一层
   `<a class="media-orig" href="{img_base_url}/{storage_key}/original.{ext}" target="_blank" rel="noopener noreferrer">`。
   链接在**读取时现算**；该图的原图被管理端手动删掉（`orig_archived=1`）时 `contentHtml` 原样返回、`MediaItem.origUrl` 为空串
@@ -561,7 +566,7 @@ apps/web/
 | 存储格式 | Markdown（GFM）+ frontmatter 语义字段存在表列，不存 YAML |
 | 渲染 | 服务端 goldmark + chroma + bluemonday；`content_html` 落库，读路径不重复渲染 |
 | 数学 | goldmark 阶段只把 TeX 包成 `<span class="math" data-tex="{escaped}">`，**不在服务端渲染 KaTeX**；前端 `<MathRender>` 动态 import `katex` 并替换 innerHTML；无 JS 时显示 TeX 原文 |
-| 代码块 | 行号、复制按钮、文件名标签、语言高亮（diff 支持） |
+| 代码块 | 行号、复制按钮、文件名标签、语言高亮（diff 支持）；文件名标签的写法见下 |
 | 图片尺寸 | 允许 goldmark 属性语法 `![alt](src){width=480}`：编辑器拖拽写回 `width`（`height` 按原图比例由读取时补），读取时补 `srcset` 的一处（`DecorateContent`）**不覆盖**已有 `width` |
 | TOC | 从 `h2/h3` 提取，生成锚点，正文标题自动加 `id` |
 | 摘要 | 未填 `excerpt` 时取正文前 160 字纯文本 |
@@ -577,6 +582,18 @@ apps/web/
 `/posts/{slug}` 的 410 由 `apps/web/middleware.ts` 在进入页面前探测 `GET /api/posts/{slug}`
 的**信封 `code`**（`1007`）并直接返回一份独立的 410 HTML；客户端导航（RSC 请求）不走这条路径，
 由页面按 `code 1002`/`1007` 走 404 兜底。
+
+**代码块的文件名标签**：围栏 info string 里除语言外写 `title="main.go"`（引号可省，`title=` 大小写不敏感）
+或 `[main.go]`，服务端渲染成
+
+```html
+<figure class="code-block" data-lang="go"><figcaption>main.go</figcaption><pre class="chroma">…</pre></figure>
+```
+
+行号由 `apps/web/styles/prose.css` 的 CSS 计数器画在 chroma 输出的 `.line::before` 上（服务端不写数字），
+复制按钮由 `ui/post/PostContent` 在客户端注入（有 `figcaption` 时按钮落在标题那一行，没有则落在 `<pre>` 右上角）。
+**只认这两种显式写法**：` ```go main.go ` 这样的裸词不当文件名——info string 里除语言外还可能有别的渲染选项，
+猜错就会把选项当标题显示出来。没有标签时**不包 `figure`**，已有正文的 HTML 与之前逐字节一致。
 
 ---
 
@@ -788,7 +805,7 @@ apps/web/
 1. 标题 ≤50 字符（中文按 2 计），不加句号。
 2. 正文每行 ≤72，写动机与取舍，不写"修改了 xx 文件"。
 3. 一次提交只碰一个模块；跨 3 个以上模块禁止。
-4. 提交必须能通过 `make check`。
+4. 提交必须能通过 `make check`（含 Go 单测、前端 lint/typecheck/test）；动了 `service` 包还要过 `make cover`（service 覆盖率 ≥70%）。
 5. 分支：`feat/<scope>-<slug>`、`fix/<scope>-<slug>`、`docs/<slug>`、`chore/<slug>`；生命周期 ≤2 天。
 6. 合并进 `main` 用 squash，squash 标题必须重写成上述格式；`main` 禁 force push，CI 必须绿。
 7. 不提交 `.env`、`*.db`、`uploads/`、`.next/`、`node_modules/`。
@@ -831,6 +848,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.18 | 2026-10-21 | **D18 测试补齐 + 覆盖率门禁，并修掉写测试时挖出的 9 处缺陷**：① 新增 `service` 包测试夹具（`service/main_test.go`：每个用例一套临时库 + 迁移到最新版 + 静默日志，因此用例**串行**执行）与 12 个测试文件（post / content / public / media+storage / publishing+task / ops / comment / stats / auth / audit / notify），**service 语句覆盖率 1.2% → 89.1%**；新增覆盖率门禁 `cmd/covergate`（Go 实现，Windows 与 Linux 同一条命令，不依赖 sh/awk）+ `make test` / `make cover`，`make check` 纳入 Go 单测与前端测试；`nodynamic` 标签贯穿 build / vet / lint / test（不带它时 `gen2brain/webp` 走 dlopen 加载宿主 libwebp，测试结论与线上二进制不一致）；`standards/go.md` §8 从"暂不写"改为正式规范（表驱动、**不写 `t.Parallel()`**、业务错误断言 `errs.As` 的 `Code`、疑似缺陷只记录不顺手改）。② **代码块文件名标签**：围栏 info string 里除语言外写 `title="main.go"`（引号可省）或 `[main.go]`，服务端输出 `<figure class="code-block" data-lang="go"><figcaption>main.go</figcaption>…`，复制按钮由客户端落到标题行；**行号本来就能用**（`prose.css` 的计数器画在 chroma 逐行输出的 `.line::before` 上，本次实证确认）；没写标签时**不包 `figure`**，已有正文的 HTML 逐字节不变。③ 编辑器：修掉从媒体库选图插入 `[object Object]`（`MediaPicker.onPick` 从"回传 Markdown 字符串"改成"回传 `MediaItem`"后漏改调用点）；拖拽/粘贴上传改为**轮询到 `ready` 才写入正文**（`processing` 时的 `url` 只是预测地址，转码失败就是死链），超时/失败都提示去媒体库确认而不是静默插死链；新增 `mediaMarkdown()` 统一拼图片语法并清掉会截断链接的方括号与换行。④ 写测试时挖出并修掉的 9 处缺陷：**登录锁定在窗口过期后永远不再触发**（窗口重置走 `CreateLoginAttempt`，撞 `(key,kind)` 唯一索引导致整笔回滚 → 计数既不重置也不累加，暴力破解在第一个窗口之后失去保护）；`Schedule` 放行 `published → scheduled`（文章从公开端撤下且原发布时间被改写，现在返回 1004）；`Publish`/`Unpublish`/`Schedule`/`RestoreRevision` 对"文章不存在"返回 1006 而非 1002；`UpdateAttachment` 允许把外链附件清成"既无外链地址也无本地文件"的空壳；空操作 `PATCH /posts/{id}` 的响应形状与正常路径不一致（`tagIds` 是 `null` 而非 `[]`）；`HandleLinkCheck` 在正文已无外链时跳过替换，旧坏链记录永久残留在任务页；`toMediaItem` 缺 1600 档时按 map 遍历顺序取主图，同一份数据每次请求返回不同 URL（改为固定优先级 1600→2400→960→480）；`settings.notify_state` 为 JSON `null` 时 `dispatch` 往 nil map 赋值 panic（巡检在 errgroup goroutine 里跑，会拖垮进程）；`referrer_host` 不做小写归一（同一来源被算成两份） |
 | 1.17 | 2026-10-21 | **D20 功能可用性修复（编辑页分类/展示 + 全站排查）**：① 文章标签与系列此前**只有后端支持**——`post_tags` 只被删除、从未被写入，编辑器也没有任何入口，导致标签/系列的真实功能不可用（公开标签云、标签页、系列页、相关文章恒为空）。现在：`POST|PUT|PATCH /posts` 新增 `tagIds`（替换式、≤20、id 必须存在），新增/更新在同一事务里写 `post_tags`，`seriesId` 补存在性校验；管理端详情回显 `tagIds` + `cover`/`ogImage`，列表项回显 `tags`/`seriesName`；编辑器补齐**标签多选、系列下拉（含系列内序号）、封面/OG 图选择、置顶、允许评论、lang** 六类控件。② 编辑器预览改走 `DecorateContent`（预览 = 发布结果的 G2 断言此前不成立）；静态页正文同样补 srcset 与原图链接；`DecorateContent` 的匹配前缀改为跟着 `img_base_url` 走（不再硬编码 `uploads/`）。③ 存储页「清理孤儿」此前只删概览里截断的 200 条，界面却写"按全量处理"——cleanup 改为全量扫描。④ 点赞限流两个方向共用同一个桶（此前各建一个 = 实际 20 次/分钟，与 10 次/分钟的契约不符）。⑤ 前端对齐：`imgBaseUrl`≤200、友链 name≤100/description≤200、跳转 `toPath` 前缀校验、附件 fileName≤200/version≤50/sort≤99999；设置页只提交真正改动的字段（只调告警不再顶掉 `content_version`）；表单错误统一渲染 `data` 里的字段错误数组（`describeApiError`）；会话过期（`code 1000`）自动回登录页；管理端首页接上 `GET /stats/overview`（此前是纯静态占位页）；CSP `img-src` 放开 `https:`（友链头像与跨源 `imgBaseUrl`）；预览链接失效改按 `code 2006` 判定；评论页「来自《标题》」指向公网站点；非文章页补 PV 打点（"全站 PV/UV"此前只统计文章页） |
 | 1.16 | 2026-10-21 | **D16 部署 + D17 备份/告警（M9b / M10）**：新增告警通道（§13 / §14）——事件 `job_failed` / `disk_high` / `cert_expiring`，渠道 webhook 或 Telegram（配置存 `settings.notify`，密钥永不回显，`null` 保持不变、`""` 清空），投递成功后 24h 静默、失败 15 分钟重试、条件恢复即清零，状态存 `settings.notify_state`；新增 `POST /notify/test`（按已保存配置立刻投递，不看 `enabled`）；新增每周任务 `integrity_check`（周一 04:30，`PRAGMA integrity_check` + 备份快照文件头校验）并加入 `POST /jobs` 手动白名单；新增配置 `tls.cert_file`（`BLOG_TLS_CERT_FILE`，容器只读看一眼宿主 certbot 证书的 `NotAfter`，留空跳过）；`PUT /settings` 只改 `notify` 时**不动** `content_version`；管理端设置页新增告警卡片与「发送测试」。**部署产物修正**：compose 显式 healthcheck + `stop_grace_period: 20s` + 可选 `/etc/letsencrypt` 只读挂载；nginx `/uploads/` 从 `alias` 改 `root`（1.24 上 `alias`+`try_files` 会拼错路径）、补 HSTS、去掉与 Go 重复的 `nosniff`；镜像装 `procps` 以支持自愈演练；§14 修正 s6/healthcheck 语义（进程退出由 s6 原地拉起，unhealthy 不会自动重启容器）；runbook 新增 §19 上线交接清单（含 G7 逐条命令与回执）、§20 告警、§21 空机恢复演练 |
 | 1.15 | 2026-10-21 | **D15 SEO（M9a）**：Next 侧新增 `/sitemap.xml`（route handler，每请求取数，只含已发布文章 + 未删除静态页 + 非空标签/系列，`public, max-age=600`）、`/rss.xml`（RSS 2.0，最近 20 篇，`content:encoded` 全文）、`/robots.txt`（禁 `/admin`、`/preview`、`/api/`，带 `Sitemap:`）；每页 `generateMetadata` 给唯一 `title`/`description`/`canonical` 与 OG/Twitter 卡片（文章页 `og:type=article` + 封面 1600 变体），`/search`、`/preview/*`、`/admin*` 一律 `noindex`；文章页输出 `Article`、首页输出 `WebSite`+`SearchAction` JSON-LD（`<script>` 带 CSP nonce）；公开 API 新增 `GET /pages`（静态页清单，sitemap 用）；§3.1 目录、§11 SEO 行、§12 缓存表、§16 G7 断言与 `runbook` §18 同步 |

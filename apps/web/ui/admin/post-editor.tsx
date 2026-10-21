@@ -8,7 +8,7 @@ import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
 import { ApiError, describeApiError } from "@/lib/api/fetcher";
-import { adminMediaApi, type MediaItem } from "@/lib/api/media";
+import { adminMediaApi, mediaMarkdown, waitForMediaReady, type MediaItem } from "@/lib/api/media";
 import {
   adminPostApi,
   type PostDetail,
@@ -115,7 +115,14 @@ function toWriteInput(
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
+  if (error instanceof ApiError) {
+    return error.message;
+  }
+  // 上传后的轮询超时/转码失败是本地抛的 Error，消息本身就是给用户看的。
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
 }
 
 /** 封面 / OG 图这类"单张图"槽位：显示当前图 + 从媒体库选一张 + 清除。 */
@@ -398,6 +405,9 @@ export function PostEditor({ postId }: { postId: number | null }) {
    *
    * 插入点在上传开始时就固定：上传是异步的，等回来再读光标会被用户随后的点击带跑。
    * 正文没被聚焦过时（例如直接往框里拖文件）追加到末尾，避免插到第 0 个字符。
+   *
+   * 上传接口返回时图片可能还在转码（`status=processing`），那时的 `url` 只是预测
+   * 地址：转码失败就是死链。所以先 `waitForMediaReady` 等到 `ready` 再落进正文。
    */
   async function uploadImages(files: File[]) {
     const images = files.filter((file) => file.type.startsWith("image/"));
@@ -415,10 +425,12 @@ export function PostEditor({ postId }: { postId: number | null }) {
     setUploadError(null);
     try {
       for (const [index, file] of images.entries()) {
-        const item = await adminMediaApi.upload(file);
-        // alt 取去掉扩展名的文件名：正文里比 "image" 之类更可读。
-        const alt = file.name.replace(/\.[^.]+$/, "") || "图片";
-        const snippet = `![${alt}](${item.url})`;
+        const uploaded = await adminMediaApi.upload(file);
+        const item =
+          uploaded.status === "ready"
+            ? uploaded
+            : await waitForMediaReady(uploaded.id);
+        const snippet = mediaMarkdown(item);
 
         const current = getValues("contentMd");
         const from = Math.min(cursor, current.length);
@@ -795,7 +807,7 @@ export function PostEditor({ postId }: { postId: number | null }) {
             />
             {uploadingImages ? (
               <p aria-live="polite" className="text-xs text-muted-foreground">
-                图片上传中…
+                图片上传并转码中…（转码完成后才会插入正文）
               </p>
             ) : null}
             {uploadError ? (
@@ -847,8 +859,8 @@ export function PostEditor({ postId }: { postId: number | null }) {
               <summary className="cursor-pointer text-sm font-medium">插入图片</summary>
               <div className="mt-3">
                 <MediaPicker
-                  onPick={(markdown) => {
-                    insertMarkdown(`\n\n${markdown}\n\n`);
+                  onPick={(item) => {
+                    insertMarkdown(`\n\n${mediaMarkdown(item)}\n\n`);
                     if (mediaDetailsRef.current) {
                       mediaDetailsRef.current.open = false;
                     }

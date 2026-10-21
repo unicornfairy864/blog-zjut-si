@@ -451,7 +451,9 @@ func (s PostService) Update(id int64, in PostUpdateInput, actor PostActor) (*mod
 	}
 
 	if len(changed) == 0 {
-		return post, nil
+		// 走同一条读路径：空操作也要返回和正常路径一致的形状（tagIds 是 []、封面是对象），
+		// 否则同一个接口会因为"有没有真的改字段"而返回两种结构。
+		return s.Get(post.ID)
 	}
 
 	action := AuditActionPostUpdate
@@ -582,7 +584,9 @@ func (s PostService) Publish(id int64, note string, actor PostActor) (*model.Pos
 		if _, ok := errs.As(err); ok {
 			return nil, err
 		}
-		return nil, fmt.Errorf("发布文章失败: %w", err)
+		// 事务里 FindPostByID 的 ErrNotFound 也要翻成 1002：否则"文章不存在"
+		// 会被包成普通错误、由 api 层归一成 1006 内部错误。
+		return nil, s.notFoundOr(err, "发布文章失败")
 	}
 	return s.Get(updated.ID)
 }
@@ -627,7 +631,7 @@ func (s PostService) Unpublish(id int64, actor PostActor) (*model.Post, error) {
 		if _, ok := errs.As(err); ok {
 			return nil, err
 		}
-		return nil, fmt.Errorf("取消发布失败: %w", err)
+		return nil, s.notFoundOr(err, "取消发布失败")
 	}
 	return s.Get(updated.ID)
 }

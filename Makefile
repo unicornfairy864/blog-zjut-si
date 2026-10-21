@@ -9,13 +9,14 @@ PNPM ?= pnpm
 SERVER_DIR := apps/server
 WEB_DIR := apps/web
 
-.PHONY: help dev dev-server dev-web build build-server build-web check fmt vet lint web-lint web-typecheck migrate
+.PHONY: help dev dev-server dev-web build build-server build-web check fmt vet lint test cover web-lint web-typecheck web-test migrate
 
 help:
 	@echo "make dev-server   启动 Go（:8640 公开 / :8641 管理）"
 	@echo "make dev-web      启动 Next（:3000，由 Go 反代）"
 	@echo "make build        构建 Go 二进制与 Next 产物"
-	@echo "make check        fmt + vet + lint + typecheck"
+	@echo "make check        fmt + vet + lint + test + web-lint + web-typecheck + web-test"
+	@echo "make cover        Go 全量测试 + service 包覆盖率门禁（≥70%）"
 	@echo "make migrate      只执行数据库迁移后退出"
 
 # 两个进程需要分别起：Go 反代到 Next，顺序不限但两个都要在。
@@ -35,22 +36,36 @@ build-server:
 build-web:
 	cd $(WEB_DIR) && $(PNPM) build
 
-check: fmt vet lint web-lint web-typecheck
+check: fmt vet lint test web-lint web-typecheck web-test
 
 fmt:
 	cd $(SERVER_DIR) && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
+# 与 build-server 同一套标签：不带 nodynamic 时 webp 会走 dlopen 动态库，
+# 测试结论就与线上二进制不一致了。
 vet:
-	cd $(SERVER_DIR) && $(GO) vet ./...
+	cd $(SERVER_DIR) && $(GO) vet -tags nodynamic ./...
 
 lint:
-	cd $(SERVER_DIR) && golangci-lint run --timeout=5m
+	cd $(SERVER_DIR) && golangci-lint run --build-tags=nodynamic --timeout=5m
+
+test:
+	cd $(SERVER_DIR) && $(GO) test -tags nodynamic ./...
+
+# 覆盖率门禁：service 包 ≥70%（agent.md §7 / standards/go.md §8）。
+# 门禁本身是 Go 程序（cmd/covergate），Windows 与 Linux 都能跑，不依赖 sh/awk。
+cover:
+	cd $(SERVER_DIR) && $(GO) test -tags nodynamic ./... -count=1 -covermode=atomic -coverprofile=coverage.out
+	cd $(SERVER_DIR) && $(GO) run ./cmd/covergate -profile=coverage.out -pkg=service -min=70
 
 web-lint:
 	cd $(WEB_DIR) && $(PNPM) lint
 
 web-typecheck:
 	cd $(WEB_DIR) && $(PNPM) typecheck
+
+web-test:
+	cd $(WEB_DIR) && $(PNPM) test
 
 # 迁移通常由进程启动时自动执行；这个目标用于预发/回滚前的单独推进。
 migrate:

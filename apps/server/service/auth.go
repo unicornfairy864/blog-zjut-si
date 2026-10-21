@@ -179,17 +179,26 @@ func (s AuthService) recordLoginFailure(username string, now dbtime.Unix) {
 			return err
 		}
 
-		if attempt == nil || now.Sub(attempt.WindowStart) >= window {
+		if attempt == nil {
 			attempt = &model.LoginAttempt{
 				Key:         username,
 				Kind:        model.AttemptKindLogin,
 				Count:       1,
 				WindowStart: now,
 			}
-			if err := model.CreateLoginAttempt(tx, attempt); err != nil {
-				return err
-			}
-			return nil
+			return model.CreateLoginAttempt(tx, attempt)
+		}
+
+		if now.Sub(attempt.WindowStart) >= window {
+			// 窗口过期：在**同一行**上重新开始计数。
+			//
+			// login_attempts 在 (key, kind) 上有唯一索引，这里如果去 INSERT 新行必然唯一冲突、
+			// 整笔事务回滚——计数既不重置也不累加，窗口起点也不刷新，于是"锁定期满之后
+			// 再也锁不上"（D18 修复）。锁也一并清掉：既然窗口已过，旧的 LockedUntil 已失效。
+			attempt.Count = 1
+			attempt.WindowStart = now
+			attempt.LockedUntil = 0
+			return model.UpdateLoginAttempt(tx, attempt)
 		}
 
 		attempt.Count++

@@ -72,6 +72,24 @@ ssh -N -D 1080 user@your-host
 - 登录页地址是 `/admin/login`；未登录访问 `/admin` 会先请求 `GET /api/admin/auth/me`，
   拿到 `code 1000`（HTTP 200）后跳回登录页。
 
+**登录锁定自测**（§9：5 次失败/10min 锁 30min，且**锁定期满后仍然能再次锁定**）
+
+```bash
+# 用一个不存在的用户名，避免把自己锁在外面；连错 5 次后第 6 次应回 2005（锁定优先于限流）
+for i in $(seq 1 5); do
+  curl -s -X POST http://127.0.0.1:8641/api/admin/auth/login -H 'Content-Type: application/json' \
+    -d '{"username":"lock-probe","password":"wrong-password"}' | grep -o '"code":[0-9-]*'
+done
+curl -s -X POST http://127.0.0.1:8641/api/admin/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"lock-probe","password":"wrong-password"}' | grep -o '"code":[0-9-]*'   # 期望 2005
+
+# 把这条计数行的人工窗口推到 10 分钟以前，模拟"锁定期已过"，再连错 5 次应当**又能锁上**
+sqlite3 /data/blog/db/blog.db \
+  "UPDATE login_attempts SET window_start = window_start - 700, locked_until = 0 WHERE key = 'lock-probe';"
+# 重复上面的 5+1 次：第 6 次必须仍是 2005；若第 6 次回的是 1000/1005，说明窗口重置又坏了
+sqlite3 /data/blog/db/blog.db "SELECT key, count, locked_until FROM login_attempts;"
+```
+
 ## 4. 迁移
 
 - 默认由进程启动时自动推进（`db.auto_migrate=true`，脚本 `//go:embed` 进二进制）。
@@ -663,6 +681,10 @@ curl -s -X PUT http://127.0.0.1:8641/api/admin/settings -H 'Content-Type: applic
   -H "X-CSRF-Token: $CSRF" -d '{"siteTimezone":"Asia/Shanghai","imgBaseUrl":""}'
 curl -s http://127.0.0.1:8640/api/site | head -c 200       # contentVersion 应比改之前大
 curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # code 1003（HTTP 200）
+
+# 7) 代码块文件名标签（§11）：围栏的 info string 里除语言外写 title="main.go"（或 [main.go]）
+#    期望：代码块上方多出一行文件名，复制按钮落在这一行；行号仍从 1 起
+#    没写标签的代码块不出标题栏，行号照旧（老正文的 HTML 逐字节不变）
 ```
 
 - `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`attachment.upload`、`settings.update`…）。

@@ -31,15 +31,41 @@ func (r *blogNodeRenderer) renderHeading(w util.BufWriter, source []byte, node a
 }
 
 // renderFencedCodeBlock 用 chroma 输出带 class 的高亮 HTML；失败时退化为转义文本。
+//
+// 写了文件名标签（§11）时把代码块包进 `<figure class="code-block">`：没有标签就
+// 不包，历史文章的 HTML 与今天完全一致。
 func (r *blogNodeRenderer) renderFencedCodeBlock(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 	if !entering {
 		return ast.WalkContinue, nil
 	}
 	block := node.(*ast.FencedCodeBlock)
 	code := block.Lines().Value(source)
+	language := string(block.Language(source))
 
-	if err := writeHighlighted(w, string(block.Language(source)), code); err != nil {
+	title := ""
+	if block.Info != nil {
+		title = codeBlockTitle(string(block.Info.Segment.Value(source)))
+	}
+
+	if title != "" {
+		if _, err := fmt.Fprintf(
+			w,
+			"<figure class=\"code-block\" data-lang=\"%s\"><figcaption>%s</figcaption>",
+			html.EscapeString(language),
+			html.EscapeString(title),
+		); err != nil {
+			return ast.WalkSkipChildren, err
+		}
+	}
+
+	if err := writeHighlighted(w, language, code); err != nil {
 		_, _ = fmt.Fprintf(w, "<pre><code>%s</code></pre>\n", html.EscapeString(string(code)))
+	}
+
+	if title != "" {
+		if _, err := fmt.Fprint(w, "</figure>\n"); err != nil {
+			return ast.WalkSkipChildren, err
+		}
 	}
 	// 代码块的行由 chroma 完整输出，跳过子节点（每行一个 Text）。
 	return ast.WalkSkipChildren, nil

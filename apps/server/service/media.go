@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -763,19 +764,43 @@ func parseMediaJob(job *model.Job) (int64, error) {
 	return payload.MediaID, nil
 }
 
+// mediaPreferredVariantOrder 是"首选变体"的优先级：契约要求封面用 1600 档，
+// 缺档时退到更大的档（浏览器等比缩小，不会失真），最后才是更小的档。
+//
+// 顺序必须固定：早先这里直接在 map 遍历里挑"第一个"，变体缺 1600 时同一份数据
+// 每次请求会返回不同的 url（Go map 顺序随机）。
+var mediaPreferredVariantOrder = []string{"1600", "2400", "960", "480"}
+
+// preferredVariantURL 按固定优先级挑一个变体 URL。
+//
+// 优先级表里一个都没有时（将来新增了档位）按名字排序取第一个：仍然是确定的，
+// 不会因为 map 遍历顺序而抖动。
+func preferredVariantURL(urls map[string]string) string {
+	for _, name := range mediaPreferredVariantOrder {
+		if url, ok := urls[name]; ok {
+			return url
+		}
+	}
+	names := make([]string, 0, len(urls))
+	for name := range urls {
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	slices.Sort(names)
+	return urls[names[0]]
+}
+
 // toMediaItem 解析 variants_json 并拼出可访问 URL。
 func toMediaItem(media *model.Media, base string) MediaItem {
 	variants := mediaVariantFiles(media)
 
 	urls := make(map[string]string, len(variants))
-	preferred := ""
 	for name, file := range variants {
-		url := base + "/" + media.StorageKey + "/" + file
-		urls[name] = url
-		if name == "1600" || preferred == "" {
-			preferred = url
-		}
+		urls[name] = base + "/" + media.StorageKey + "/" + file
 	}
+	preferred := preferredVariantURL(urls)
 	if preferred == "" && media.StorageKey != "" {
 		// 处理中的图片没有变体，先给出 1600 的预期 URL，前端按 status 决定是否展示。
 		preferred = base + "/" + media.StorageKey + "/1600.webp"

@@ -91,3 +91,77 @@ export const adminMediaApi = {
     });
   },
 };
+
+/**
+ * 正文里插入一张图用的 Markdown。
+ *
+ * alt 优先用人工描述，其次原文件名（去掉扩展名）；方括号会截断 Markdown 的
+ * 链接语法，换行会破坏段落，所以这两类字符在这里就去掉。
+ */
+export function mediaMarkdown(item: MediaItem): string {
+  const alt = (item.alt || item.originalName.replace(/\.[^.]+$/, ""))
+    .replaceAll("[", "")
+    .replaceAll("]", "")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+  return `![${alt || "图片"}](${item.url})`;
+}
+
+/** `waitForMediaReady` 的可注入点：测试用假时钟与假数据源，生产走默认实现。 */
+export interface WaitForMediaReadyOptions {
+  /** 最长等待时间，默认 30 秒。 */
+  timeoutMs?: number;
+  /** 轮询间隔，默认 1.5 秒。 */
+  intervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  find?: (id: number) => Promise<MediaItem | null>;
+}
+
+/**
+ * 等到图片转码完成再返回条目。
+ *
+ * `processing` 状态下 `item.url` 只是按 sha256 推出来的预测地址：转码失败就是
+ * 一条死链，所以拖拽/粘贴上传后必须等到 `ready` 才写进正文（§10）。
+ * 超过 `timeoutMs` 或转码失败都抛错，让调用方提示用户去媒体库确认，而不是静默插死链。
+ */
+export async function waitForMediaReady(
+  id: number,
+  options: WaitForMediaReadyOptions = {},
+): Promise<MediaItem> {
+  const {
+    timeoutMs = 30_000,
+    intervalMs = 1_500,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    now = () => Date.now(),
+    find = findMediaItem,
+  } = options;
+
+  // 双保险：假时钟不前进时靠次数上限退出，避免测试或异常环境下空转。
+  const deadline = now() + timeoutMs;
+  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / intervalMs) + 1);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const item = await find(id);
+    if (item?.status === "ready") {
+      return item;
+    }
+    if (item?.status === "failed") {
+      throw new Error(
+        item.error ? `图片转码失败：${item.error}` : "图片转码失败，请重新上传",
+      );
+    }
+    if (now() >= deadline || attempt + 1 >= maxAttempts) {
+      break;
+    }
+    await sleep(intervalMs);
+  }
+
+  throw new Error("图片仍在转码，请稍后在媒体库里确认");
+}
+
+/** 媒体库按创建时间倒序，刚上传的那张一定在第一页。 */
+async function findMediaItem(id: number): Promise<MediaItem | null> {
+  const page = await adminMediaApi.list({ page: 1, pageSize: 20 });
+  return page.list.find((item) => item.id === id) ?? null;
+}

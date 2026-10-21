@@ -11,6 +11,8 @@ dist/
 *.test
 coverage.out
 coverage.html
+# Windows PowerShell 5.1 会把 `-coverprofile=coverage.out` 截成 `coverage`，兜底忽略
+/apps/server/coverage
 
 # 运行时数据
 *.db

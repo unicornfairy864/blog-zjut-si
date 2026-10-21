@@ -55,6 +55,7 @@
 ```
 
 `cover` 无封面时为 `null`；`variants` 与 `url` 的规则同媒体库（`img_base_url` 为空时用相对路径）。
+`url` 的选档顺序固定为 `1600` → `2400` → `960` → `480`（缺档时退到更大的档），所以同一份数据每次请求拿到的是同一个地址。
 列表、搜索、标签、系列、相关文章返回的都是这个列表项，`prev` / `next` 只在详情里出现。
 
 ### `GET /api/posts/{slug}`
@@ -403,7 +404,7 @@ PV 打点。请求体：
 
 | 端点 | 说明 |
 | --- | --- |
-| `POST /api/admin/posts/{id}/schedule` | `{"publishedAt": 1760000000, "note": "定时发布"}`；`publishedAt` 必须是**未来**时间（否则 `200 + code 1003`，`data` 带 `field=publishedAt`），落 `scheduled` 并投递 `publish_scheduled` 任务 |
+| `POST /api/admin/posts/{id}/schedule` | `{"publishedAt": 1760000000, "note": "定时发布"}`；`publishedAt` 必须是**未来**时间（否则 `200 + code 1003`，`data` 带 `field=publishedAt`），落 `scheduled` 并投递 `publish_scheduled` 任务。只有 `draft` 能定时：`published` / `archived` → `200 + code 1004`（要重新定时先 `unpublish`） |
 | `POST /api/admin/posts/{id}/unpublish` | 退回草稿，同时撤掉该文待执行的 `publish_scheduled` 任务 |
 | `POST /api/admin/posts/{id}/revisions/{rid}/restore` | `{"note": "回滚"}` 可选；用旧版本覆盖正文并**再写一条新 revision**（`revision+1`），历史不被改写 |
 | `GET /api/admin/posts/{id}/revisions` | `data: {"list":[…]}`，最多 50 条、按 `revisionNo` 倒序，**不含正文** |
@@ -481,7 +482,7 @@ PV 打点。请求体：
 | `PUT /api/admin/redirects/{id}` · `DELETE /api/admin/redirects/{id}` | 同上 |
 | `GET /api/admin/attachments?postId=&page=&pageSize=` | 附件分页，按 `sort`、`id` 升序 |
 | `POST /api/admin/attachments` | `{"postId":3,"title":"源码","shareUrl":"https://…","fileName":"src.zip","bytes":1024,"sha256":"","version":"v1","sort":0}` |
-| `PUT /api/admin/attachments/{id}` · `DELETE /api/admin/attachments/{id}` | 同上字段，均可选 |
+| `PUT /api/admin/attachments/{id}` · `DELETE /api/admin/attachments/{id}` | 同上字段，均可选。外链附件（没有 `storage_key`）把 `shareUrl` 清空 → `200 + code 1003`（`data` 带 `field=shareUrl`）：不允许留下"既没有外链地址也没有本地文件"的空壳；本地附件不受影响 |
 | `GET /api/attachments/{id}/go` | **公开**：`302` 跳 `share_url` 并 `clicks+1`；不存在 → `200 + code 1002`；响应 `no-store` |
 
 ```json

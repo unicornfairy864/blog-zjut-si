@@ -691,6 +691,14 @@ func (s ContentService) UpdateAttachment(id int64, in AttachmentInput, actor Pos
 	if fields := validateAttachmentValues(values); len(fields) > 0 {
 		return nil, contentFieldError(fields)
 	}
+	// 与 CreateAttachment 同一条口径：外链附件必须留 shareUrl。storage_key 不在可更新
+	// 字段里，所以能落进这里只有一种情形——把外链附件的 shareUrl 清空，
+	// 那会留下"既没有外链地址、也没有本地文件"的空壳记录。
+	if values.ShareURL == "" && item.StorageKey == "" {
+		return nil, contentFieldError([]request.FieldError{
+			{Field: "shareUrl", Message: "外链附件必须填 shareUrl；本地附件请用 /attachments/upload"},
+		})
+	}
 	if values.PostID != item.PostID {
 		if err := ensurePostExists(values.PostID); err != nil {
 			return nil, err

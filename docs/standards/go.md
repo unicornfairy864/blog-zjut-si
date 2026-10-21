@@ -89,33 +89,57 @@ global.Log.Error("写审计日志失败", "action", in.Action, "err", err)
 - 不写裸 `go func()`：用 `errgroup.Group` 管生命周期（见 `initialize/server.go`）。
 - 后台任务单实例；调度器每 60s 扫描一次。
 
-## 8. 测试模板（D18 补齐，当前不写）
+## 8. 测试
+
+测试与业务代码同包（`package service`），共享夹具在 `service/main_test.go`。
 
 ```go
 func TestLogin_Locked(t *testing.T) {
-    t.Parallel()
-    cases := []struct{ name string; ... }{...}
+    setupEnv(t)                        // 临时目录 + 迁移完成的空库 + 静默日志 + 访客盐
+    actor := testActor(t)              // 指向一个新建管理员的写操作上下文
+
+    cases := []struct {
+        name     string
+        failures int
+        wantCode int
+    }{ /* … */ }
+
     for _, tc := range cases {
-        tc := tc
         t.Run(tc.name, func(t *testing.T) {
-            t.Parallel()
-            // arrange: 临时 SQLite（t.TempDir）+ 迁移
-            // act / assert
+            // arrange: 直接用 global.DB 造数据（insertPost / insertTag / insertSeries / countRows）
+            // act
+            appErr, ok := errs.As(err)
+            // assert
+            require.True(t, ok)
+            assert.Equal(t, tc.wantCode, appErr.Code)
         })
     }
 }
 ```
 
-- 表驱动 + `t.Parallel()`；service 覆盖率 ≥70%；每个 API 至少 happy path + 错误路径。
-- 状态机与任务调度必须有单测（§16）。
+- **表驱动**；**不要写 `t.Parallel()`**：`global.DB` / `global.Config` / `global.Log` 都是进程级单例，
+  每个用例用 `setupEnv(t)` 换一套临时库，只有串行执行才安全。纯函数（`core/render`、`utils`）不受此限，照常用 `t.Parallel()`。
+- 断言用 `testify`：`require` 用于"不成立就别继续"的前置条件，`assert` 用于断言。
+- 业务错误一律断言 `errs.As(err)` 的 `Code`（**不要**断言 `err.Error()` 文案）；字段级校验再看 `Details`。
+- 每个 API 至少 happy path + 错误路径；状态机（文章状态、评论审核、任务状态）与调度必须有单测（§16）。
+- **service 包覆盖率 ≥70%**，门禁命令 `make cover`（等价 `cd apps/server && go test -tags nodynamic ./... -covermode=atomic -coverprofile=coverage.out && go run ./cmd/covergate -pkg=service -min=70`）。
+  覆盖率只用来找"完全没测到的分支"，不要为了数字写无意义断言。
+- **Windows PowerShell 5.1 的坑**：`-coverprofile=coverage.out` 这样的参数会被截断成 `coverage`（把 `.out` 吃掉），
+  手敲命令时必须加引号：`"-coverprofile=coverage.out"`、`"-profile=coverage.out"`。Makefile 走 `sh`，不受影响。
+- 用例里发现的疑似缺陷**不要顺手改业务代码**：照现状写断言并加 `// 疑似缺陷：…` 注释，在批次汇报里列出。
 
 ## 9. 质量门
 
 ```bash
-gofmt -l .            # 必须为空
-go vet ./...
-golangci-lint run     # govet,errcheck,staticcheck,revive,gosec,bodyclose,unparam
-go build -tags nodynamic ./...   # WebP 走 wazero，不依赖宿主 libwebp
+gofmt -l .                                    # 必须为空
+go vet -tags nodynamic ./...
+golangci-lint run --build-tags=nodynamic
+go build -tags nodynamic ./...                # WebP 走 wazero，不依赖宿主 libwebp
+go test -tags nodynamic ./...                 # 单测全绿
 ```
 
-提交前跑 `make check`（含前端 lint 与 typecheck）。
+`nodynamic` 必须贯穿编译、vet、lint 与测试：不带它时 `gen2brain/webp` 会走 `purego`/dlopen
+去加载宿主 libwebp，测试结论就与线上二进制不一致了。
+
+提交前跑 `make check`（含前端 lint、typecheck 与 `pnpm test`）；动了 `service` / `model` / `core` 时另外跑
+`make cover`（service 包覆盖率 ≥70%）。

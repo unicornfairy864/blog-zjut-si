@@ -69,6 +69,11 @@ func (s PostService) Schedule(id int64, publishedAt dbtime.Unix, note string, ac
 		if post.Status == model.PostStatusArchived {
 			return errs.New(errs.ErrorConflict, "已归档文章不能定时发布")
 		}
+		// §6 的状态机里没有 published → scheduled 这条边：直接放行会把文章从公开端
+		// 撤下来，还会把原发布时间改写成未来时间。要重新定时必须先取消发布。
+		if post.Status == model.PostStatusPublished {
+			return errs.New(errs.ErrorConflict, "已发布文章请先取消发布再定时")
+		}
 
 		now := dbtime.Now()
 		payload := scheduledJobPayload(post.ID)
@@ -104,7 +109,7 @@ func (s PostService) Schedule(id int64, publishedAt dbtime.Unix, note string, ac
 		if _, ok := errs.As(err); ok {
 			return nil, err
 		}
-		return nil, fmt.Errorf("定时发布失败: %w", err)
+		return nil, s.notFoundOr(err, "定时发布失败")
 	}
 	return s.Get(id)
 }
@@ -202,7 +207,7 @@ func (s PostService) RestoreRevision(id, revisionID int64, note string, actor Po
 		if _, ok := errs.As(err); ok {
 			return nil, err
 		}
-		return nil, fmt.Errorf("回滚版本失败: %w", err)
+		return nil, s.notFoundOr(err, "回滚版本失败")
 	}
 	return s.Get(id)
 }

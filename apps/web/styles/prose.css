@@ -52,6 +52,24 @@
   content: counter(line);
 }
 
+/*
+ * 带文件名标签的代码块（§11）：服务端输出
+ * <figure class="code-block" data-lang="go"><figcaption>main.go</figcaption><pre class="chroma">…
+ * 没有标签的代码块不包 figure，样式与上面完全一致。
+ */
+.prose-blog figure.code-block {
+  @apply relative overflow-hidden rounded-lg bg-muted;
+}
+
+.prose-blog figure.code-block figcaption {
+  /* pr-20 给右上角的复制按钮留位（按钮由 PostContent 注入，落在这一行）。 */
+  @apply border-b border-border px-4 py-1.5 pr-20 font-mono text-xs text-muted-foreground;
+}
+
+.prose-blog figure.code-block pre {
+  @apply rounded-none bg-transparent;
+}
+
 /* 复制按钮由 PostContent 在客户端注入；无 JS 时不出现，正文仍完整可读。 */
 .prose-blog .code-copy {
   @apply absolute right-2 top-2 rounded border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground opacity-70 transition-opacity;
