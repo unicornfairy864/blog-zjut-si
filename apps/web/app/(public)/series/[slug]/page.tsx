@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { isApiCode, publicApi } from "@/lib/api/public";
+import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -11,15 +12,23 @@ interface SeriesDetailPageProps {
   params: Promise<{ slug: string }>;
 }
 
+/** 系列详情的 title / description / canonical（agent.md §11）。 */
 export async function generateMetadata({
   params,
 }: SeriesDetailPageProps): Promise<Metadata> {
   const { slug } = await params;
   try {
     const { series } = await publicApi.seriesDetail(slug);
+    const description = series.description || `系列 ${series.name}。`;
     return {
       title: series.name,
-      description: series.description || `系列 ${series.name}。`,
+      description,
+      alternates: { canonical: `/series/${series.slug}` },
+      openGraph: buildOpenGraph({
+        title: series.name,
+        description,
+        url: absoluteUrl(`/series/${series.slug}`),
+      }),
     };
   } catch {
     return { title: "系列" };

@@ -214,6 +214,13 @@ export interface SiteInfo {
   };
 }
 
+/** 静态页清单项（sitemap 用；不出正文）。 */
+export interface PublicPageRef {
+  slug: string;
+  title: string;
+  updatedAt: number;
+}
+
 /** 静态页（/about 等）。 */
 export interface PageDetail {
   slug: string;
@@ -366,6 +373,11 @@ export const publicApi = {
   /** 友链。 */
   links() {
     return apiFetch<{ list: LinkItem[] }>("/api/links");
+  },
+
+  /** 静态页清单：全部未删除的静态页，sitemap 用（不出正文）。 */
+  pages() {
+    return apiFetch<{ list: PublicPageRef[] }>("/api/pages");
   },
 
   /** 静态页；不存在 code 1002，软删 code 1007。 */

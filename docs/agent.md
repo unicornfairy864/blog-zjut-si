@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.14**（2026-10-20 业务错误统一 HTTP 200：成功/失败只看信封 `code`，见 §5 与 §22）
+> 版本：**v1.15**（2026-10-21 D15 SEO：sitemap / RSS / JSON-LD / OG，见 §11 与 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -94,9 +94,11 @@
 │     ├─ app/(public)/        # 公开页
 │     ├─ app/(admin)/admin/   # 管理页（全 client）：(protected)/ 带会话守卫，login/ 不带
 │     ├─ app/(preview)/preview/[token]/
-│     ├─ app/api/             # 仅 og 图 / rss 等 Next 自身端点
-│     ├─ ui/{shadcn,layout,post,admin,shared}
-│     ├─ lib/{api,hooks,zod,constants,swr}
+│     ├─ app/robots.ts        # /robots.txt（禁 /admin、/preview、/api）
+│     ├─ app/sitemap.xml/route.ts   # /sitemap.xml（每请求取数，只含已发布）
+│     ├─ app/rss.xml/route.ts       # /rss.xml（RSS 2.0 全文）
+│     ├─ ui/{shadcn,layout,post,admin,shared,seo}
+│     ├─ lib/{api,hooks,zod,constants,swr,seo.ts}
 │     ├─ styles/ public/ tests/ e2e/
 │     ├─ next.config.ts  tailwind.config.ts  tsconfig.json  components.json
 │     ├─ middleware.ts       # 每请求 nonce 的 CSP（§9）
@@ -248,11 +250,13 @@ storage_driver  : local                             # 只有本地磁盘，不�
 
 **公开组（8640）**
 
-`GET /site` · `GET /posts` · `GET /posts/{slug}` · `GET /posts/{slug}/related` · `GET /posts/{slug}/comments` · `POST /posts/{slug}/comments` · `POST /posts/{slug}/like` · `DELETE /posts/{slug}/like` · `GET /posts/{slug}/stats` · `GET /tags` · `GET /tags/{slug}` · `GET /archive` · `GET /series` · `GET /series/{slug}` · `GET /search?q` · `GET /links` · `GET /pages/{slug}` · `POST /events/view` · `GET /attachments/{id}/go` · `GET /preview/{token}`（`no-store`） · `GET /system/ping`（骨架探活）
+`GET /site` · `GET /posts` · `GET /posts/{slug}` · `GET /posts/{slug}/related` · `GET /posts/{slug}/comments` · `POST /posts/{slug}/comments` · `POST /posts/{slug}/like` · `DELETE /posts/{slug}/like` · `GET /posts/{slug}/stats` · `GET /tags` · `GET /tags/{slug}` · `GET /archive` · `GET /series` · `GET /series/{slug}` · `GET /search?q` · `GET /links` · `GET /pages` · `GET /pages/{slug}` · `POST /events/view` · `GET /attachments/{id}/go` · `GET /preview/{token}`（`no-store`） · `GET /system/ping`（骨架探活）
 
 **管理组（8641）**
 
-`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `DELETE /media/{id}/original` · `POST /media/{id}/retry` · `GET /storage` · `POST /storage/cleanup` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|PUT /pages/{slug}` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `POST /attachments/upload` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
+`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `DELETE /media/{id}/original` · `POST /media/{id}/retry` · `GET /storage` · `POST /storage/cleanup` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `POST /attachments/upload` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
+
+> **尚未实现**（接口清单里出现过、路由还没注册的，别当契约用）：管理端 `GET|PUT /pages/{slug}`（静态页写接口）与 `POST /api/internal/revalidate`。
 
 **内部组（8641，仅容器内/隧道）**
 
@@ -549,7 +553,7 @@ apps/web/
 | slug | 手填优先；未填时取标题拼音前 40 字符，失败用 `post-{YYYYMMDD}-{HHmm}`；发布后不可变 |
 | 上一篇/下一篇 | 按 `published_at` 相邻，仅同状态 |
 | 时间展示 | 站点时区 `Asia/Shanghai`；存储 UTC |
-| SEO | 每页唯一 `title/description/canonical`；文章页输出 `Article` JSON-LD；`sitemap.xml` 仅含 published；`rss.xml` 全文；`robots.txt` 禁 `/admin`、`/preview` |
+| SEO | 每页唯一 `title`/`description`/`canonical`（分页列表的 canonical 是它自己，不指回第 1 页）；文章页输出 `Article` JSON-LD（首页输出 `WebSite` + `SearchAction`），`<script type="application/ld+json">` 带 CSP nonce；`sitemap.xml` 只含已发布文章 + 静态页 + 非空标签/系列；`rss.xml` 取最近 20 篇、`<content:encoded>` 全文；`robots.txt` 禁 `/admin`、`/preview`、`/api/`；`/search`、`/preview/*`、全部 `/admin*` 为 `noindex`；OG/Twitter 卡片用封面 `1600` 变体，**不做**动态 OG 图片（白名单里没有生成库） |
 | 草稿隔离 | 未发布内容在任何公开接口、sitemap、RSS、搜索中均不可见 |
 | 410 | `archived` 与已删除文章：API 返回 `code 1007`（HTTP 200），页面仍返回 HTTP **410**（由 `middleware.ts` 决定），不返回 404 |
 
@@ -569,6 +573,7 @@ apps/web/
 | KaTeX 字体与 CSS | `public, max-age=31536000, immutable` | 自托管，不打 CDN |
 | HTML | `Cache-Control: no-cache` + 强 `ETag` | 每次回源校验，304 省流量 |
 | 公开 API | `Cache-Control: no-cache` + `ETag` | ETag 取响应体哈希 |
+| `sitemap.xml` / `rss.xml` / `robots.txt` | `public, max-age=600` | sitemap 与 rss 每请求渲染（构建期不取数）；robots.txt 只依赖常量，构建期生成为静态文件 |
 | 管理端全部 | `no-store` | 禁止任何中间层缓存 |
 
 **明确不做**：Redis、ISR、`revalidate` 定时、`proxy_cache`、CDN、Service Worker。
@@ -638,7 +643,7 @@ apps/web/
 | G4 公开端 | D9–D10 | 375px 无横向滚动；分页 + 标签组合正确；404 无堆栈；`srcset` 生效；系列/友链/关于页可访问 |
 | G5 互动 | D11–D12 | 评论 3/10min 限流 = 200 + `code 1005`；嵌套 ≤2 层；spam 不进公开列表；点赞幂等；同 visitor 10 分钟内 PV 只 +1；`stats_daily` 按上海时区切日 |
 | G6 发布控制 | D13 | 定时发布到点生效（误差 <90s）；回滚生成新 revision；预览链接 24h 后 = 200 + `code 2006`；`cleanup` 能删掉构造的过期数据 |
-| G7 SEO 与部署 | D15–D16 | sitemap 无草稿；RSS 校验通过；JSON-LD 无错误；canonical 唯一；`kill -9` 后 30s 自愈；隧道可登录；nginx 静态图片可访问；证书续期 dry-run 通过 |
+| G7 SEO 与部署 | D15–D16 | `sitemap.xml` 只含已发布（草稿/定时/归档/回收站一律不出现）且 XML 合法；`rss.xml` 可被解析、条目 ≤20 且带 `content:encoded` 全文；每页 JSON-LD 可 `JSON.parse` 且 `@type` 正确；每页恰好一个 `canonical` 且互不相同；`robots.txt` 含 `Sitemap:` 且禁 `/admin`、`/preview`、`/api/`；`kill -9` 后 30s 自愈；隧道可登录；nginx 静态图片可访问；证书续期 dry-run 通过 |
 | G8 备份、测试与性能 | D17–D19 | `VACUUM INTO` 可还原；空机恢复演练成功；单测/接口/E2E 全绿；service 覆盖率 ≥70%；TTFB <300ms；LCP <2.5s；内存不超 §15 |
 
 **测试要求**：状态机与任务调度必须有单元测试；每个 API 至少一条 happy path + 一条错误路径；禁止提交无测试的状态迁移代码。
@@ -803,6 +808,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.15 | 2026-10-21 | **D15 SEO（M9a）**：Next 侧新增 `/sitemap.xml`（route handler，每请求取数，只含已发布文章 + 未删除静态页 + 非空标签/系列，`public, max-age=600`）、`/rss.xml`（RSS 2.0，最近 20 篇，`content:encoded` 全文）、`/robots.txt`（禁 `/admin`、`/preview`、`/api/`，带 `Sitemap:`）；每页 `generateMetadata` 给唯一 `title`/`description`/`canonical` 与 OG/Twitter 卡片（文章页 `og:type=article` + 封面 1600 变体），`/search`、`/preview/*`、`/admin*` 一律 `noindex`；文章页输出 `Article`、首页输出 `WebSite`+`SearchAction` JSON-LD（`<script>` 带 CSP nonce）；公开 API 新增 `GET /pages`（静态页清单，sitemap 用）；§3.1 目录、§11 SEO 行、§12 缓存表、§16 G7 断言与 `runbook` §18 同步 |
 | 1.14 | 2026-10-20 | **连接建立后一律 HTTP 200，状态只存在 `code` 里**（gin-vue-admin 风格）：`response.FailWithDetailed` 固定 `200` 并保留 `Abort`；`data` 语义不变（无附加数据仍为 `null`，字段错误仍为 `[{field,message}]`）；`errs.HTTPStatus` / `AppError.HTTPStatus` 保留但不再决定状态码；前端 `fetcher.ts`、`lib/api/public.ts`（`isApiError` → `isApiCode`）、`middleware.ts`（按 `code 1007` 回 410 页面）、评论与点赞组件的错误分支全部改按 `code`；§5 明确**例外清单**（只有 HTTP 协议语义才保留真实状态码）：健康检查 `200/503`、静态文件直出 `200/404`、附件文件流 `200/206`、跳转 `301/302`、ETag `304`；**路由不存在**与 **Next 转发失败**也改成 `200` + `code 1002` / `code 1006`。登录改为**先判锁定再判限流**：连续 5 次错误口令后第 6 次直接 `code 2005`，不再被 `code 1005` 挡住。§2 拓扑与 §16 G1 断言同步（8640 上 `/api/admin/posts`、`/healthz` 改为 `200 + code 1002`） |
 | 1.13 | 2026-10-20 | **图床下线，图片与附件全部本地自托管**：删除 Cloudreve/WebDAV 集成（`cloudreve.*` 配置、`gowebdav` 依赖、`media_archive` 任务、`media.archive` 审计、设置页图床块），C10 扩为"图片与附件都不入库、不上 CDN/对象存储"；原图**永久保留**（取消 30 天清理），「查看原图」改指同源 `/uploads/{key}/original.{ext}`；新增附件本地上传 `POST /attachments/upload`（multipart，落 `file.dir/{sha[:2]}/{sha256}{ext}`，按 sha256 去重）与附件安全黑名单（`415/2007`、`413/2008`），公开 `/attachments/{id}/go` 对本地附件直接下发（`octet-stream` + `Content-Disposition` + `nosniff` + Range）、对外链附件仍 302；新增 `GET /storage` 与 `POST /storage/cleanup`（占用统计、孤儿与缺失对账、孤儿清理）与 `DELETE /media/{id}/original`（删原图保变体）；`post_attachments` 增 `storage_key`/`mime`（migration 000003），`backup` 同时快照 `files/`，`cleanup` 不再动原图与附件 |
 | 1.12 | 2026-10-19 | D14 内容管理与运维闭环（M8）：`tags`/`series`/`links`/`redirects`/`attachments` 管理端 CRUD（`GET|POST /x`、`PUT|DELETE /x/{id}`，分类列表带未删除文章数、删分类不删文章）；公开 `GET /attachments/{id}/go`（302 + `clicks+1`）与公开边缘按 `redirects.from_path` 精确 301/302（`hits+1`）；`GET|PUT /settings` 只允许改 `imgBaseUrl` / `siteTimezone` 并强制 `content_version+1`，图床口令永不返回；管理端 `GET /jobs` 与 `GET /audit-logs` 分页；web 新增标签/系列/友链/跳转/附件/任务/审计/设置页 |

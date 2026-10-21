@@ -4,6 +4,7 @@ import { cache } from "react";
 
 import { isApiCode, publicApi, type PageDetail } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
+import { absoluteUrl, buildOpenGraph, excerptFromHtml } from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
 import { PostContent } from "@/ui/post/post-content";
 
@@ -30,15 +31,30 @@ const loadPage = cache(async (slug: string): Promise<PageDetail> => {
   }
 });
 
+/** 静态页的 description：SEO 描述 → 正文前 160 字纯文本 → 站点描述（agent.md §11）。 */
+function descriptionOf(page: PageDetail): string {
+  return (
+    page.seoDescription || excerptFromHtml(page.contentHtml) || SITE.description
+  );
+}
+
 export async function generateMetadata({
   params,
 }: StaticPageProps): Promise<Metadata> {
   const { slug } = await params;
   try {
     const page = await loadPage(slug);
+    const title = page.seoTitle || page.title;
+    const description = descriptionOf(page);
     return {
-      title: page.seoTitle || page.title,
-      description: page.seoDescription || SITE.description,
+      title,
+      description,
+      alternates: { canonical: `/${page.slug}` },
+      openGraph: buildOpenGraph({
+        title,
+        description,
+        url: absoluteUrl(`/${page.slug}`),
+      }),
     };
   } catch {
     return { title: "页面" };

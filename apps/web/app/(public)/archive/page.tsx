@@ -2,14 +2,26 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { publicApi } from "@/lib/api/public";
+import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "归档",
-  description: "按年月归档的全部文章。",
-};
+const DESCRIPTION = "按年月归档的全部文章。";
+
+/** 归档页的 title / description / canonical（agent.md §11）。 */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: "归档",
+    description: DESCRIPTION,
+    alternates: { canonical: "/archive" },
+    openGraph: buildOpenGraph({
+      title: "归档",
+      description: DESCRIPTION,
+      url: absoluteUrl("/archive"),
+    }),
+  };
+}
 
 /** 归档页：年 → 月 → 文章（agent.md §5 `GET /archive`）。 */
 export default async function ArchivePage() {

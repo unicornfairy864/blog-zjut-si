@@ -45,6 +45,20 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "no-cache" },
         ],
       },
+      {
+        // sitemap / rss / robots 是爬虫入口，允许 10 分钟浏览器缓存（agent.md §12）。
+        // 必须排在 catch-all 之后：同名的响应头按配置顺序后者覆盖前者。
+        source: "/sitemap.xml",
+        headers: [{ key: "Cache-Control", value: "public, max-age=600" }],
+      },
+      {
+        source: "/rss.xml",
+        headers: [{ key: "Cache-Control", value: "public, max-age=600" }],
+      },
+      {
+        source: "/robots.txt",
+        headers: [{ key: "Cache-Control", value: "public, max-age=600" }],
+      },
     ];
   },
 };

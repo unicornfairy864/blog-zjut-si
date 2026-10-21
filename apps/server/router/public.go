@@ -59,6 +59,8 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 		api.GET("/series", v1.ApiGroupApp.Public.Series.List)
 		api.GET("/series/:slug", v1.ApiGroupApp.Public.Series.Detail)
 		api.GET("/links", v1.ApiGroupApp.Public.Link.List)
+		// 静态页清单要注册在 :slug 之前，否则会被当成 slug 吃掉。
+		api.GET("/pages", v1.ApiGroupApp.Public.Page.List)
 		api.GET("/pages/:slug", v1.ApiGroupApp.Public.Page.Detail)
 	}
 

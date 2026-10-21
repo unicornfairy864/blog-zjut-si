@@ -301,6 +301,18 @@ PV 打点。请求体：
 }
 ```
 
+### `GET /api/pages`
+
+全部未删除静态页的清单（`sitemap.xml` 用；不出正文）。
+
+```json
+{
+  "code": 0,
+  "data": { "list": [{ "slug": "about", "title": "关于", "updatedAt": 1760000000 }] },
+  "msg": "操作成功"
+}
+```
+
 ### `GET /api/pages/{slug}`
 
 静态页（`/about` 等）。不存在 → `200 + code 1002`；软删 → `200 + code 1007`。
@@ -631,8 +643,18 @@ PV 打点。请求体：
 | 端点 | 说明 |
 | --- | --- |
 | `GET /healthz` | 进程存活，`{"status":"ok","time":…}` |
-| `GET /readyz` | DB / 磁盘 <85% / uploads 可写 / 队列 <100；任一失败 503 |
+| `GET /readyz` | DB / 磁盘 <85% / uploads 可写 / 队列 <100；任一失败 **503**（§5 例外清单） |
 | `GET /api/internal/health` | 走统一信封的内部健康检查 |
+
+## Next 自身端点（不走 Go，D15）
+
+这些由 Next 的 route handler 每请求渲染（构建期不取数），内容来自上面这些公开 API：
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /sitemap.xml` | 只含已发布文章、未删除静态页与非空标签/系列；`Cache-Control: public, max-age=600` |
+| `GET /rss.xml` | RSS 2.0，最近 20 篇已发布文章，`<content:encoded>` 全文 |
+| `GET /robots.txt` | 禁 `/admin`、`/preview`、`/api/`，带 `Sitemap:` |
 
 ## 错误码
 

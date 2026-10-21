@@ -607,7 +607,7 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/attachments -H 'Content-Type: ap
 # 4) 存储管理：/admin/storage 应显示原图/变体/附件占用；孤儿清单可一键清掉
 curl -s http://127.0.0.1:8641/api/admin/storage | head -c 400
 
-# 4) 设置：改时区 → content_version+1（公开读的 ETag 随之失效）
+# 5) 设置：改时区 → content_version+1（公开读的 ETag 随之失效）
 curl -s -X PUT http://127.0.0.1:8641/api/admin/settings -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" -d '{"siteTimezone":"Asia/Shanghai","imgBaseUrl":""}'
 curl -s http://127.0.0.1:8640/api/site | head -c 200       # contentVersion 应比改之前大
@@ -616,4 +616,48 @@ curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # code 1003（HTTP 20
 
 - `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`attachment.upload`、`settings.update`…）。
 - 设置接口**永不返回** `visitor_salt`；`/admin/settings` 里只回显目录、上限与任务周期。
+
+---
+
+## 18. SEO 自测（D15 / G7 前半）
+
+准备：至少 1 篇已发布文章、1 篇草稿、1 个静态页（`/about`）、1 个标签。`/sitemap.xml`、`/rss.xml`、
+`/robots.txt` 都由 **Next** 渲染（不是 Go 的 API），所以走的是公开边缘：
+
+```bash
+BASE=http://127.0.0.1:8640          # 线上换成 https://blog.zjut.si
+
+# 1) sitemap：只含已发布；草稿绝不出现
+curl -s $BASE/sitemap.xml | head -20
+curl -s $BASE/sitemap.xml | grep -c '<loc>'                  # 条数与"已发布文章 + 静态页 + 非空标签/系列 + 固定页"对得上
+curl -s $BASE/sitemap.xml | grep -c '<草稿slug>'             # 必须是 0
+curl -sI $BASE/sitemap.xml | grep -i 'content-type\|cache-control'   # application/xml + max-age=600
+curl -s $BASE/sitemap.xml | python3 -c 'import sys,xml.dom.minidom as m; m.parseString(sys.stdin.read()); print("xml ok")'
+
+# 2) rss：可解析、条目 ≤20、带全文
+curl -s $BASE/rss.xml | python3 -c 'import sys,xml.dom.minidom as m; d=m.parseString(sys.stdin.read()); print(len(d.getElementsByTagName("item")), "items")'
+curl -s $BASE/rss.xml | grep -c 'content:encoded'            # 与条目数一致
+curl -sI $BASE/rss.xml | grep -i 'content-type\|cache-control'       # application/rss+xml + max-age=600
+
+# 3) robots
+curl -s $BASE/robots.txt                                     # 含 Disallow: /admin、/preview、/api/ 与 Sitemap:
+
+# 4) 每页恰好一个 canonical，且互不相同
+for p in / /posts /archive /tags /series /links /posts/<slug> /about /tags/<tag> /series/<serie>; do
+  printf '%-24s %s\n' "$p" "$(curl -s "$BASE$p" | grep -c 'rel="canonical"')"
+done
+for p in <上面同一批>; do curl -s "$BASE$p" | grep -o '<link rel="canonical" href="[^"]*"'; done | sort | uniq -d   # 期望无输出
+
+# 5) JSON-LD：能解析且类型正确（文章页 Article、首页 WebSite）
+curl -s $BASE/posts/<slug> | grep -o '<script type="application/ld+json">.*</script>' | sed -e 's/<[^>]*>//g' | jq -r '."@type"'
+curl -s $BASE/ | grep -o '<script type="application/ld+json">.*</script>' | sed -e 's/<[^>]*>//g' | jq -r '."@type"'
+
+# 6) 该 noindex 的都 noindex
+curl -s $BASE/search | grep -o '<meta name="robots"[^>]*>'
+curl -s $BASE/preview/<token> | grep -o '<meta name="robots"[^>]*>'
+```
+
+- sitemap 里出现草稿时：先用 `GET /api/posts?status=draft` 确认草稿确实不在公开列表里，再看是不是被
+  `(public)/[slug]` 这个动态路由吃掉了（Next 里静态路由优先，正常不会）。
+- `/preview/*` 的 410 页面由 `middleware.ts` 返回（页面级状态码），与本节检查无关。
 

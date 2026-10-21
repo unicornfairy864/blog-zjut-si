@@ -137,3 +137,21 @@ return apiFetch<PostStats>(`/api/posts/${slug}/stats`, { headers: visitorHeaders
   拖动过程只改内联样式，写回 Markdown 只发生在 `pointerup`，否则会每个 pointermove 都触发
   一次 600ms 防抖预览。
 
+## 12. SEO 与元数据（D15）
+
+- 每个公开页都要有 `generateMetadata`：`title`、`description`、`alternates.canonical` 三者缺一不可，
+  且**同一站点内 canonical 不重复**；分页列表的 canonical 是它自己（`/posts?page=2`），不要指回第 1 页。
+- 绝对地址一律用 `SITE.url` 拼（`lib/seo.ts` 的 `absoluteUrl()`），不要在页面里手写域名。
+- OG/Twitter：站点级默认写在布局，文章页覆写成 `type: "article"` 并带 `publishedTime`/`tags`/封面图
+  （四档里的 `1600`）。**不做**动态 OG 图片（§17.2 白名单里没有生成库）。
+- JSON-LD：纯数据构造放 `lib/seo.ts`（可单测），渲染放 `ui/seo/json-ld.tsx`；
+  `<script type="application/ld+json">` **必须带 CSP nonce**（`(await headers()).get("x-nonce")`），
+  `JSON.stringify` 结果里的 `<` 要转义成 `\u003c`。
+- 不该进索引的页面显式声明 `robots: { index: false }`：`/search`、`/preview/*`、全部 `/admin*`。
+- 爬虫入口：`app/sitemap.xml/route.ts` 与 `app/rss.xml/route.ts` 是 route handler，必须
+  `export const dynamic = "force-dynamic"`（构建期绝不取数）；`app/robots.ts` 只依赖常量，
+  构建期生成为静态文件即可。三者的 `Cache-Control: public, max-age=600` 写在
+  `next.config.ts` 的 headers 里（必须排在 catch-all 之后，同名头后者覆盖前者）。
+- 新增 `generateMetadata` 后要确认它没有被 `(public)/[slug]` 这类动态段抢走路由
+  （Next 里静态路由优先，但必须在 `next build` 的路由表里核对一遍）。
+

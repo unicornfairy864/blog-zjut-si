@@ -47,6 +47,27 @@ func (p Page) PublicDetail() PublicPageDetail {
 	}
 }
 
+// PublicPageRef 是公开的静态页清单项（sitemap 用；不出正文）。
+type PublicPageRef struct {
+	Slug      string      `json:"slug"`
+	Title     string      `json:"title"`
+	UpdatedAt dbtime.Unix `json:"updatedAt"`
+}
+
+// ListPublicPages 返回全部未删除的静态页，按 slug 升序（公开 sitemap 用）。
+func ListPublicPages(db *gorm.DB) ([]PublicPageRef, error) {
+	items := make([]PublicPageRef, 0)
+	err := db.Model(&Page{}).
+		Select("slug, title, updated_at").
+		Where("deleted_at IS NULL").
+		Order("slug ASC").
+		Scan(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // FindPageBySlug 按 slug 查询静态页；withDeleted 为 true 时包含软删记录（公开端用它返回 410）。
 func FindPageBySlug(db *gorm.DB, slug string, withDeleted bool) (*Page, error) {
 	query := db.Where("slug = ?", slug)

@@ -231,6 +231,15 @@ func (s PublicService) Page(slug string) (model.PublicPageDetail, error) {
 	return page.PublicDetail(), nil
 }
 
+// Pages 返回全部未删除的静态页清单（公开 sitemap 用；不出正文）。
+func (s PublicService) Pages() ([]model.PublicPageRef, error) {
+	items, err := model.ListPublicPages(global.DB)
+	if err != nil {
+		return nil, fmt.Errorf("查询页面清单失败: %w", err)
+	}
+	return items, nil
+}
+
 // Related 返回相关文章：同标签或同系列、排除自身、仅已发布，最多 6 篇；
 // 没有关联时返回空数组。文章不存在 / 归档 / 已删除与详情同口径。
 func (s PublicService) Related(slug string) ([]model.PublicPostListItem, error) {

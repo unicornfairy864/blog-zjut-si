@@ -2,13 +2,25 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { publicApi } from "@/lib/api/public";
+import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "标签",
-  description: "按标签浏览文章。",
-};
+const DESCRIPTION = "按标签浏览文章。";
+
+/** 标签云的 title / description / canonical（agent.md §11）。 */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: "标签",
+    description: DESCRIPTION,
+    alternates: { canonical: "/tags" },
+    openGraph: buildOpenGraph({
+      title: "标签",
+      description: DESCRIPTION,
+      url: absoluteUrl("/tags"),
+    }),
+  };
+}
 
 /** 标签云：只列有已发布文章的标签（agent.md §5）。 */
 export default async function TagsPage() {

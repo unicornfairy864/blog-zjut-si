@@ -2,13 +2,25 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { publicApi } from "@/lib/api/public";
+import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "系列",
-  description: "成系列的长文集合。",
-};
+const DESCRIPTION = "成系列的长文集合。";
+
+/** 系列列表的 title / description / canonical（agent.md §11）。 */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: "系列",
+    description: DESCRIPTION,
+    alternates: { canonical: "/series" },
+    openGraph: buildOpenGraph({
+      title: "系列",
+      description: DESCRIPTION,
+      url: absoluteUrl("/series"),
+    }),
+  };
+}
 
 /** 系列列表（agent.md §5 `GET /series`）。 */
 export default async function SeriesListPage() {

@@ -10,10 +10,19 @@ const PAGE_SIZE = 10;
 /** 与服务端一致的关键词长度上限（agent.md §5）。 */
 const MAX_KEYWORD_LENGTH = 64;
 
-export const metadata: Metadata = {
-  title: "搜索",
-  description: "站内全文搜索。",
-};
+/**
+ * 搜索页的元信息（agent.md §11）。
+ *
+ * 搜索结果页不入索引（`index: false`），但保留跟随，方便爬虫从结果页走到文章页；
+ * canonical 留空——搜索词组合无穷，指哪一个都不对。
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: "搜索",
+    description: "站内全文搜索。",
+    robots: { index: false, follow: true },
+  };
+}
 
 interface SearchPageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;

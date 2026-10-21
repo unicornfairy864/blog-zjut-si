@@ -5,6 +5,13 @@ import { cache } from "react";
 
 import { isApiCode, publicApi, type PublicPostDetail } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
+import {
+  absoluteUrl,
+  buildArticleJsonLd,
+  buildOpenGraph,
+  coverImageUrl,
+  excerptFromHtml,
+} from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
 import { CommentSection } from "@/ui/post/comment-section";
 import { PostCard } from "@/ui/post/post-card";
@@ -12,6 +19,7 @@ import { PostContent } from "@/ui/post/post-content";
 import { PostImage } from "@/ui/post/post-image";
 import { PostInteractions } from "@/ui/post/post-interactions";
 import { PostToc, extractToc } from "@/ui/post/post-toc";
+import { JsonLd } from "@/ui/seo/json-ld";
 
 export const dynamic = "force-dynamic";
 
@@ -36,26 +44,42 @@ const loadPost = cache(async (slug: string): Promise<PublicPostDetail> => {
   }
 });
 
+/** 文章页的 canonical：优先作者填的 `canonicalUrl`，否则用自身路径。 */
+function canonicalPath(post: PublicPostDetail): string {
+  return post.canonicalUrl || `/posts/${post.slug}`;
+}
+
+/** 文章页的 description：SEO 描述 → 摘要 → 站点描述。 */
+function descriptionOf(post: PublicPostDetail): string {
+  return post.seoDescription || post.excerpt || SITE.description;
+}
+
 export async function generateMetadata({
   params,
 }: PostDetailPageProps): Promise<Metadata> {
   const { slug } = await params;
   try {
     const post = await loadPost(slug);
+    const title = post.seoTitle || post.title;
+    const description = descriptionOf(post);
+    const cover = coverImageUrl(post.cover);
     return {
-      title: post.seoTitle || post.title,
-      description: post.seoDescription || post.excerpt || SITE.description,
-      alternates: post.canonicalUrl ? { canonical: post.canonicalUrl } : undefined,
-      openGraph: {
+      title,
+      description,
+      alternates: { canonical: canonicalPath(post) },
+      openGraph: buildOpenGraph({
         type: "article",
-        title: post.seoTitle || post.title,
-        description: post.seoDescription || post.excerpt || SITE.description,
+        title,
+        description,
+        url: absoluteUrl(canonicalPath(post)),
         publishedTime: post.publishedAt
           ? new Date(post.publishedAt * 1000).toISOString()
           : undefined,
         modifiedTime: new Date(post.updatedAt * 1000).toISOString(),
         tags: post.tags.map((tag) => tag.name),
-      },
+        // 封面取 1600 档；没有封面就不给 images（agent.md §11）。
+        images: cover ? [cover] : undefined,
+      }),
     };
   } catch {
     return { title: "文章" };
@@ -77,9 +101,26 @@ export default async function PostDetailPage({
     .comments(slug)
     .catch(() => ({ total: 0, list: [] }));
   const toc = extractToc(post.contentHtml);
+  const cover = coverImageUrl(post.cover);
 
   return (
     <div className="mx-auto w-full max-w-5xl">
+      <JsonLd
+        data={buildArticleJsonLd({
+          url: absoluteUrl(canonicalPath(post)),
+          title: post.seoTitle || post.title,
+          description:
+            post.seoDescription ||
+            post.excerpt ||
+            excerptFromHtml(post.contentHtml),
+          publishedAt: post.publishedAt,
+          updatedAt: post.updatedAt,
+          images: cover ? [absoluteUrl(cover)] : undefined,
+          keywords: post.tags.map((tag) => tag.name),
+          lang: post.lang,
+          wordCount: post.wordCount,
+        })}
+      />
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_14rem] lg:gap-10">
         <article className="min-w-0 space-y-6">
           <header className="space-y-3">

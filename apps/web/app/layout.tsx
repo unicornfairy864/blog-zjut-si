@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { SITE } from "@/lib/constants/site";
+import { buildOpenGraph } from "@/lib/seo";
 import "@/styles/globals.css";
 import "@/styles/prose.css";
 import "@/styles/chroma.css";
@@ -21,6 +22,14 @@ export const metadata: Metadata = {
   description: SITE.description,
   authors: [{ name: SITE.author }],
   robots: { index: true, follow: true },
+  // Next 对 openGraph / twitter 是整体替换而非深合并，所以站点级默认在这里给一份，
+  // 自己声明 openGraph 的页面（见 lib/seo.ts 的 buildOpenGraph）必须把 siteName 带上。
+  openGraph: buildOpenGraph({
+    title: SITE.title,
+    description: SITE.description,
+    url: SITE.url,
+  }),
+  twitter: { card: "summary_large_image" },
   // 不使用 next/font/google：字体自托管，构建期不依赖外网（agent.md §12）。
   icons: { icon: "/favicon.ico" },
 };

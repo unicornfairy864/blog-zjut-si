@@ -1,13 +1,25 @@
 import type { Metadata } from "next";
 
 import { publicApi } from "@/lib/api/public";
+import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "友链",
-  description: "常看的朋友们的站点。",
-};
+const DESCRIPTION = "常看的朋友们的站点。";
+
+/** 友链页的 title / description / canonical（agent.md §11）。 */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: "友链",
+    description: DESCRIPTION,
+    alternates: { canonical: "/links" },
+    openGraph: buildOpenGraph({
+      title: "友链",
+      description: DESCRIPTION,
+      url: absoluteUrl("/links"),
+    }),
+  };
+}
 
 /** 友链页（agent.md §5 `GET /links`）。 */
 export default async function LinksPage() {

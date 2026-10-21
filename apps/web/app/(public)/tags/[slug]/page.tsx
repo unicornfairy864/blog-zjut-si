@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { isApiCode, publicApi } from "@/lib/api/public";
+import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 import { Pagination } from "@/ui/shared/pagination";
 import { PostCard } from "@/ui/post/post-card";
 
@@ -21,15 +22,33 @@ function parsePage(raw: string | string[] | undefined): number {
   return Number.isFinite(page) && page > 0 ? page : 1;
 }
 
+/**
+ * 标签详情的 title / description / canonical。
+ *
+ * 这个页面也分页，所以 canonical 同样要带上 `?page=N`，否则每页的 canonical 会撞在一起。
+ */
 export async function generateMetadata({
   params,
+  searchParams,
 }: TagPageProps): Promise<Metadata> {
   const { slug } = await params;
+  const query = await searchParams;
+  const page = parsePage(query.page);
   try {
     const { tag } = await publicApi.tag(slug);
+    const title = `#${tag.name}${page > 1 ? ` · 第 ${page} 页` : ""}`;
+    const description = tag.description || `标签 ${tag.name} 下的文章。`;
+    const canonical =
+      page > 1 ? `/tags/${tag.slug}?page=${page}` : `/tags/${tag.slug}`;
     return {
-      title: `#${tag.name}`,
-      description: tag.description || `标签 ${tag.name} 下的文章。`,
+      title,
+      description,
+      alternates: { canonical },
+      openGraph: buildOpenGraph({
+        title,
+        description,
+        url: absoluteUrl(canonical),
+      }),
     };
   } catch {
     return { title: "标签" };

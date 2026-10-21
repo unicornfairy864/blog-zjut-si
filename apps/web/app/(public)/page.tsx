@@ -1,14 +1,32 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { publicApi } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
+import { buildOpenGraph, buildWebsiteJsonLd } from "@/lib/seo";
 import { PostCard } from "@/ui/post/post-card";
+import { JsonLd } from "@/ui/seo/json-ld";
 
 /** 公开页按请求渲染（agent.md §8）。 */
 export const dynamic = "force-dynamic";
 
 /** 首页只放最新一屏，更多走 /posts。 */
 const HOME_PAGE_SIZE = 10;
+
+/** 首页的 title / description / canonical 与站点级默认一致（agent.md §11）。 */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    // `absolute` 避开根布局的 `%s · zjut.si` 模板，否则会拼成「zjut.si · zjut.si」。
+    title: { absolute: SITE.title },
+    description: SITE.description,
+    alternates: { canonical: "/" },
+    openGraph: buildOpenGraph({
+      title: SITE.title,
+      description: SITE.description,
+      url: SITE.url,
+    }),
+  };
+}
 
 /** 首页：站点简介 + 置顶优先的最新文章。 */
 export default async function HomePage() {
@@ -19,6 +37,8 @@ export default async function HomePage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-10">
+      <JsonLd data={buildWebsiteJsonLd()} />
+
       <section className="space-y-3">
         <h1 className="text-2xl font-semibold tracking-tight">{SITE.name}</h1>
         <p className="text-sm leading-6 text-muted-foreground">
