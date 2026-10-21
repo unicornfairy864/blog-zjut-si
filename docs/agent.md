@@ -11,7 +11,7 @@
 
 ## 0. 一句话定义
 
-一台 4C/4G 海外 VPS 上的**单人技术博客**：Next.js 负责所有页面渲染，Go 负责全部业务逻辑与 API，SQLite 存数据，浏览器与宿主 nginx 承担全部缓存职责，管理端经 SSH 隧道访问、永不上公网。
+一台 3C/4G 海外 VPS 上的**单人技术博客**：Next.js 负责所有页面渲染，Go 负责全部业务逻辑与 API，SQLite 存数据，浏览器与宿主 nginx 承担全部缓存职责，管理端经 SSH 隧道访问、永不上公网。
 
 ---
 
@@ -295,6 +295,9 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | --- | --- |
 | 分类 CRUD | `GET|POST /{tags\|series}`、`PUT|DELETE /{tags\|series}/{id}`；`name` 必填且唯一，`slug` 可留空（ASCII 名自动生成，中文名必须手填，非法/冲突 → `code 1003`、`code 2001`）；列表带 `count`（该分类下**未删除**文章数，含草稿） |
 | 删除分类 | 连带清掉 `post_tags` / 把 `posts.series_id` 置 NULL，不删文章 |
+| 文章标签 | `POST|PUT|PATCH /posts` 的 `tagIds`（整数数组，**替换式**：传了就整体替换该文的标签，不传 = 不改；自动去重、忽略 `≤0`、最多 20 个，超限 → `code 1003`）；**id 必须存在**，否则 `code 1003`（`data` 带 `tagIds`）。管理端详情回显 `tagIds`，列表项回显 `tags[{name,slug}]` |
+| 文章系列 | `seriesId`（`0` 表示清空）+ `seriesOrder`（`≥0`）；`seriesId` 指向不存在的系列 → `code 1003`（`data` 带 `seriesId`）。一篇文章最多属于一个系列 |
+| 编辑器回显 | 管理端详情另出 `cover` / `ogImage`（`{id,url,alt,width,height}`，由 service 按外键补齐），供编辑器显示已选封面；外键指向的图已被删除时为 `null`（不报错） |
 | 友链 CRUD | `GET|POST /links`、`PUT|DELETE /links/{id}`；`status` 只有 `active`/`hidden`，公开端只出 `active` |
 | 跳转 CRUD | `GET|POST /redirects`、`PUT|DELETE /redirects/{id}`；`status` 只有 301/302，`fromPath` 唯一且必须以 `/` 开头（≤200），`toPath` 必须以 `/` 开头或 `http(s)://` 开头（≤500）；**公开边缘按 `from_path` 精确匹配直接 301/302 并 `hits+1`**（在转 Next 之前处理） |
 | 附件 | `GET|POST /attachments`、`POST /attachments/upload`、`PUT|DELETE /attachments/{id}`；JSON 创建只用于**外链**（`shareUrl` 必填且是 http(s)，留空 → `code 1003`），本地文件走 `POST /attachments/upload`（multipart：`file`、`postId`、可选 `title`/`version`/`sort`，`title` 默认取去掉扩展名的文件名） |
@@ -828,6 +831,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.17 | 2026-10-21 | **D20 功能可用性修复（编辑页分类/展示 + 全站排查）**：① 文章标签与系列此前**只有后端支持**——`post_tags` 只被删除、从未被写入，编辑器也没有任何入口，导致标签/系列的真实功能不可用（公开标签云、标签页、系列页、相关文章恒为空）。现在：`POST|PUT|PATCH /posts` 新增 `tagIds`（替换式、≤20、id 必须存在），新增/更新在同一事务里写 `post_tags`，`seriesId` 补存在性校验；管理端详情回显 `tagIds` + `cover`/`ogImage`，列表项回显 `tags`/`seriesName`；编辑器补齐**标签多选、系列下拉（含系列内序号）、封面/OG 图选择、置顶、允许评论、lang** 六类控件。② 编辑器预览改走 `DecorateContent`（预览 = 发布结果的 G2 断言此前不成立）；静态页正文同样补 srcset 与原图链接；`DecorateContent` 的匹配前缀改为跟着 `img_base_url` 走（不再硬编码 `uploads/`）。③ 存储页「清理孤儿」此前只删概览里截断的 200 条，界面却写"按全量处理"——cleanup 改为全量扫描。④ 点赞限流两个方向共用同一个桶（此前各建一个 = 实际 20 次/分钟，与 10 次/分钟的契约不符）。⑤ 前端对齐：`imgBaseUrl`≤200、友链 name≤100/description≤200、跳转 `toPath` 前缀校验、附件 fileName≤200/version≤50/sort≤99999；设置页只提交真正改动的字段（只调告警不再顶掉 `content_version`）；表单错误统一渲染 `data` 里的字段错误数组（`describeApiError`）；会话过期（`code 1000`）自动回登录页；管理端首页接上 `GET /stats/overview`（此前是纯静态占位页）；CSP `img-src` 放开 `https:`（友链头像与跨源 `imgBaseUrl`）；预览链接失效改按 `code 2006` 判定；评论页「来自《标题》」指向公网站点；非文章页补 PV 打点（"全站 PV/UV"此前只统计文章页） |
 | 1.16 | 2026-10-21 | **D16 部署 + D17 备份/告警（M9b / M10）**：新增告警通道（§13 / §14）——事件 `job_failed` / `disk_high` / `cert_expiring`，渠道 webhook 或 Telegram（配置存 `settings.notify`，密钥永不回显，`null` 保持不变、`""` 清空），投递成功后 24h 静默、失败 15 分钟重试、条件恢复即清零，状态存 `settings.notify_state`；新增 `POST /notify/test`（按已保存配置立刻投递，不看 `enabled`）；新增每周任务 `integrity_check`（周一 04:30，`PRAGMA integrity_check` + 备份快照文件头校验）并加入 `POST /jobs` 手动白名单；新增配置 `tls.cert_file`（`BLOG_TLS_CERT_FILE`，容器只读看一眼宿主 certbot 证书的 `NotAfter`，留空跳过）；`PUT /settings` 只改 `notify` 时**不动** `content_version`；管理端设置页新增告警卡片与「发送测试」。**部署产物修正**：compose 显式 healthcheck + `stop_grace_period: 20s` + 可选 `/etc/letsencrypt` 只读挂载；nginx `/uploads/` 从 `alias` 改 `root`（1.24 上 `alias`+`try_files` 会拼错路径）、补 HSTS、去掉与 Go 重复的 `nosniff`；镜像装 `procps` 以支持自愈演练；§14 修正 s6/healthcheck 语义（进程退出由 s6 原地拉起，unhealthy 不会自动重启容器）；runbook 新增 §19 上线交接清单（含 G7 逐条命令与回执）、§20 告警、§21 空机恢复演练 |
 | 1.15 | 2026-10-21 | **D15 SEO（M9a）**：Next 侧新增 `/sitemap.xml`（route handler，每请求取数，只含已发布文章 + 未删除静态页 + 非空标签/系列，`public, max-age=600`）、`/rss.xml`（RSS 2.0，最近 20 篇，`content:encoded` 全文）、`/robots.txt`（禁 `/admin`、`/preview`、`/api/`，带 `Sitemap:`）；每页 `generateMetadata` 给唯一 `title`/`description`/`canonical` 与 OG/Twitter 卡片（文章页 `og:type=article` + 封面 1600 变体），`/search`、`/preview/*`、`/admin*` 一律 `noindex`；文章页输出 `Article`、首页输出 `WebSite`+`SearchAction` JSON-LD（`<script>` 带 CSP nonce）；公开 API 新增 `GET /pages`（静态页清单，sitemap 用）；§3.1 目录、§11 SEO 行、§12 缓存表、§16 G7 断言与 `runbook` §18 同步 |
 | 1.14 | 2026-10-20 | **连接建立后一律 HTTP 200，状态只存在 `code` 里**（gin-vue-admin 风格）：`response.FailWithDetailed` 固定 `200` 并保留 `Abort`；`data` 语义不变（无附加数据仍为 `null`，字段错误仍为 `[{field,message}]`）；`errs.HTTPStatus` / `AppError.HTTPStatus` 保留但不再决定状态码；前端 `fetcher.ts`、`lib/api/public.ts`（`isApiError` → `isApiCode`）、`middleware.ts`（按 `code 1007` 回 410 页面）、评论与点赞组件的错误分支全部改按 `code`；§5 明确**例外清单**（只有 HTTP 协议语义才保留真实状态码）：健康检查 `200/503`、静态文件直出 `200/404`、附件文件流 `200/206`、跳转 `301/302`、ETag `304`；**路由不存在**与 **Next 转发失败**也改成 `200` + `code 1002` / `code 1006`。登录改为**先判锁定再判限流**：连续 5 次错误口令后第 6 次直接 `code 2005`，不再被 `code 1005` 挡住。§2 拓扑与 §16 G1 断言同步（8640 上 `/api/admin/posts`、`/healthz` 改为 `200 + code 1002`） |

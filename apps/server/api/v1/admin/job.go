@@ -37,7 +37,7 @@ func (JobApi) List(c *gin.Context) {
 	response.OkWithPage(c, jobs, total, page.Page, page.PageSize)
 }
 
-// Enqueue 处理 POST /api/admin/jobs：手动投递 cleanup / backup / link_check。
+// Enqueue 处理 POST /api/admin/jobs：手动投递 cleanup / backup / link_check / integrity_check。
 func (JobApi) Enqueue(c *gin.Context) {
 	var req jobEnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

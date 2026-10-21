@@ -6,10 +6,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
-import { ApiError } from "@/lib/api/fetcher";
+import { ApiError, describeApiError } from "@/lib/api/fetcher";
 import {
   adminAttachmentApi,
-  attachmentGoPath,
+  attachmentGoURL,
   type AdminAttachment,
   type AdminAttachmentListResult,
   type AttachmentCreateInput,
@@ -608,7 +608,7 @@ export function AttachmentManager() {
       setFormVersion((current) => current + 1);
       await mutate();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "保存失败，请稍后重试");
+      setError(describeApiError(caught, "保存失败，请稍后重试"));
     } finally {
       setBusy(false);
     }
@@ -625,7 +625,7 @@ export function AttachmentManager() {
       await mutate();
       return true;
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "上传失败，请稍后重试");
+      setError(describeApiError(caught, "上传失败，请稍后重试"));
       return false;
     } finally {
       setBusy(false);
@@ -647,7 +647,7 @@ export function AttachmentManager() {
       setNotice(`附件 #${item.id} 已删除。`);
       await mutate();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "删除失败，请稍后重试");
+      setError(describeApiError(caught, "删除失败，请稍后重试"));
     } finally {
       setBusy(false);
     }
@@ -655,7 +655,7 @@ export function AttachmentManager() {
 
   async function copyPath(item: AdminAttachment) {
     try {
-      await navigator.clipboard.writeText(attachmentGoPath(item.id));
+      await navigator.clipboard.writeText(attachmentGoURL(item.id));
       setCopied(item.id);
       window.setTimeout(() => setCopied(null), 1_500);
     } catch {
@@ -808,7 +808,7 @@ export function AttachmentManager() {
                           {item.mime || "—"}
                         </p>
                         <code className="text-xs text-muted-foreground">
-                          {attachmentGoPath(item.id)}
+                          {attachmentGoURL(item.id)}
                         </code>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">

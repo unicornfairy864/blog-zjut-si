@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
-import type { ApiError } from "@/lib/api/fetcher";
+import { describeApiError, type ApiError } from "@/lib/api/fetcher";
 import {
   adminTaxonomyApi,
   LINK_STATUSES,
@@ -107,7 +107,7 @@ export function LinkManager() {
       cancelEdit();
       await mutate();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "保存失败，请稍后重试");
+      setError(describeApiError(caught, "保存失败，请稍后重试"));
     }
   }
 
@@ -123,7 +123,7 @@ export function LinkManager() {
       }
       await mutate();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "删除失败，请稍后重试");
+      setError(describeApiError(caught, "删除失败，请稍后重试"));
     }
   }
 

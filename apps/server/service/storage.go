@@ -64,9 +64,17 @@ type StorageCleanupResult struct {
 
 // StorageOverview 对账磁盘与数据库：统计占用、列出孤儿文件与缺失文件（§10）。
 //
+// 清单会按 storageOrphanListMax 截断（计数是全量）；清理走 scanStorage(0) 拿全量。
+func (s MediaService) StorageOverview() (StorageOverview, error) {
+	return s.scanStorage(storageOrphanListMax)
+}
+
+// scanStorage 是对账的实际实现；orphanLimit ≤0 表示孤儿清单不截断。
+//
+// 概览接口要截断（清单只给人看），清理要走全量（否则超过 200 个孤儿永远清不完）。
 // 判定规则：文件所在目录名（图片）或相对路径（附件）就是 storage_key，
 // 库里有对应记录即为"在用"，否则是孤儿；库里记录了但文件不在即为"缺失"。
-func (s MediaService) StorageOverview() (StorageOverview, error) {
+func (s MediaService) scanStorage(orphanLimit int) (StorageOverview, error) {
 	overview := StorageOverview{
 		UploadDir: global.Config.Upload.Dir,
 		FileDir:   global.Config.File.Dir,
@@ -131,7 +139,7 @@ func (s MediaService) StorageOverview() (StorageOverview, error) {
 			if _, ok := mediaByKey[key]; !ok {
 				overview.OrphanCount++
 				overview.OrphanBytes += info.Size()
-				if len(overview.Orphans) < storageOrphanListMax {
+				if orphanLimit <= 0 || len(overview.Orphans) < orphanLimit {
 					overview.Orphans = append(overview.Orphans, StorageFile{
 						Path: filepath.ToSlash(relative), Bytes: info.Size(), Kind: kind,
 					})
@@ -175,7 +183,7 @@ func (s MediaService) StorageOverview() (StorageOverview, error) {
 			if _, ok := attachmentKeys[key]; !ok {
 				overview.OrphanCount++
 				overview.OrphanBytes += info.Size()
-				if len(overview.Orphans) < storageOrphanListMax {
+				if orphanLimit <= 0 || len(overview.Orphans) < orphanLimit {
 					overview.Orphans = append(overview.Orphans, StorageFile{
 						Path: key, Bytes: info.Size(), Kind: "attachment",
 					})
@@ -245,8 +253,9 @@ func (o *StorageOverview) addMissing(item StorageMissing) {
 // CleanupOrphans 删除磁盘上没有任何记录引用的文件（§10）。
 //
 // 只删孤儿，不碰"库里有记录但文件缺失"的情况（那是对账信息，需要人工判断）。
+// 用 scanStorage(0) 拿**全量**孤儿清单：概览接口那份是截断过的，照它清会永远清不完。
 func (s MediaService) CleanupOrphans(actor PostActor) (StorageCleanupResult, error) {
-	overview, err := s.StorageOverview()
+	overview, err := s.scanStorage(0)
 	if err != nil {
 		return StorageCleanupResult{}, err
 	}

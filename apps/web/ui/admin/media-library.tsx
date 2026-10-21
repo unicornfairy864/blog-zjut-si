@@ -240,6 +240,13 @@ export function MediaLibrary() {
                       <Button
                         size="sm"
                         variant="outline"
+                        // processing 时 item.url 只是"预期的 1600 地址"：转码失败会留下死链。
+                        disabled={item.status !== "ready"}
+                        title={
+                          item.status === "ready"
+                            ? undefined
+                            : "转码完成后才能复制"
+                        }
                         onClick={() => void copyText(markdown, `md-${item.id}`)}
                       >
                         {copied === `md-${item.id}` ? "已复制" : "复制 Markdown"}
@@ -247,6 +254,7 @@ export function MediaLibrary() {
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={item.status !== "ready"}
                         onClick={() => void copyText(item.url, `url-${item.id}`)}
                       >
                         复制链接

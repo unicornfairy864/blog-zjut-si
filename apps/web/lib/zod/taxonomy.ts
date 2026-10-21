@@ -52,7 +52,7 @@ export const linkSchema = z.object({
     .string()
     .trim()
     .min(1, "请输入名称")
-    .max(200, "名称不能超过 200 个字符"),
+    .max(100, "名称不能超过 100 个字符"),
   url: z
     .string()
     .trim()
@@ -67,7 +67,7 @@ export const linkSchema = z.object({
       (value) => value === "" || HTTP_URL_PATTERN.test(value),
       "头像必须是 http(s) 地址，或留空",
     ),
-  description: z.string().max(500, "描述不能超过 500 个字符"),
+  description: z.string().max(200, "描述不能超过 200 个字符"),
   sort: z
     .string()
     .trim()
@@ -93,7 +93,11 @@ export const redirectSchema = z.object({
     .string()
     .trim()
     .min(1, "请输入目标路径")
-    .max(500, "目标路径不能超过 500 个字符"),
+    .max(500, "目标路径不能超过 500 个字符")
+    .refine(
+      (value) => value.startsWith("/") || HTTP_URL_PATTERN.test(value),
+      "目标路径必须以 / 开头，或是 http(s) 绝对地址",
+    ),
   status: z.enum(redirectStatusValues),
 });
 

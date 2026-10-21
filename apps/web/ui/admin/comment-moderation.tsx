@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 
@@ -11,6 +10,7 @@ import {
   type CommentStatus,
 } from "@/lib/api/comments";
 import type { ApiError } from "@/lib/api/fetcher";
+import { SITE } from "@/lib/constants/site";
 import { swrKeys } from "@/lib/swr/keys";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
@@ -67,6 +67,12 @@ export function CommentModeration() {
     setPage(1);
     setSelected([]);
     setError(null);
+  }
+
+  // 翻页要清空已选：否则批量操作会作用到当前看不见的评论。
+  function changePage(next: number) {
+    setPage(next);
+    setSelected([]);
   }
 
   function toggle(id: number) {
@@ -215,7 +221,7 @@ export function CommentModeration() {
             size="sm"
             variant="outline"
             disabled={page <= 1}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            onClick={() => changePage(Math.max(1, page - 1))}
           >
             上一页
           </Button>
@@ -226,7 +232,7 @@ export function CommentModeration() {
             size="sm"
             variant="outline"
             disabled={page >= totalPages}
-            onClick={() => setPage((current) => current + 1)}
+            onClick={() => changePage(page + 1)}
           >
             下一页
           </Button>
@@ -291,13 +297,14 @@ function CommentRow({
           </p>
           <p className="text-xs text-muted-foreground">
             来自{" "}
-            <Link
-              href={`/posts/${comment.postSlug}`}
+            <a
+              href={`${SITE.url}/posts/${comment.postSlug}`}
               target="_blank"
+              rel="noreferrer"
               className="underline-offset-4 hover:underline"
             >
               《{comment.postTitle || comment.postSlug}》
-            </Link>
+            </a>
             {comment.parentId ? ` · 回复 #${comment.parentId}` : ""}
           </p>
         </div>

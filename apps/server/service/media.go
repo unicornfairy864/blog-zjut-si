@@ -408,8 +408,31 @@ func origURL(media *model.Media, base string) string {
 	return base + "/" + media.StorageKey + "/original." + media.Ext
 }
 
-// mediaUploadsSrcRe 匹配本站图片地址里的 storage_key（{sha[:2]}/{sha256}）。
-var mediaUploadsSrcRe = regexp.MustCompile(`uploads/([0-9a-f]{2})/([0-9a-f]{64})/`)
+// mediaUploadsSrcTemplate 是"URL 前缀 + storage_key"正则的尾巴部分。
+const mediaUploadsSrcTemplate = `/([0-9a-f]{2})/([0-9a-f]{64})/`
+
+// mediaContentSrcRe 返回匹配 `{img_base_url}/{sha[:2]}/{sha256}/` 的正则（按前缀缓存）。
+//
+// 不能硬编码 `uploads/`：img_base_url 配成别的路径（例如走 CDN 前缀）时，
+// srcset 与「查看原图」链接会静默失效——图片照样显示，只是少了响应式属性。
+func mediaContentSrcRe(base string) *regexp.Regexp {
+	mediaSrcReMu.Lock()
+	defer mediaSrcReMu.Unlock()
+
+	if mediaSrcReCached != nil && mediaSrcReBase == base {
+		return mediaSrcReCached
+	}
+	mediaSrcReCached = regexp.MustCompile(regexp.QuoteMeta(base) + mediaUploadsSrcTemplate)
+	mediaSrcReBase = base
+	return mediaSrcReCached
+}
+
+// mediaSrcReMu 保护下面两个缓存字段；前缀来自配置，运行期几乎不变。
+var (
+	mediaSrcReMu     sync.Mutex
+	mediaSrcReBase   string
+	mediaSrcReCached *regexp.Regexp
+)
 
 // mediaImgTagRe 匹配渲染后的 <img ...>；正文经 bluemonday 过滤，属性值里不会出现 '>'。
 var mediaImgTagRe = regexp.MustCompile(`(?i)<img\b[^>]*>`)
@@ -441,7 +464,7 @@ func (s MediaService) DecorateContent(contentHTML string) string {
 		return contentHTML
 	}
 
-	matches := mediaUploadsSrcRe.FindAllStringSubmatch(contentHTML, -1)
+	matches := mediaContentSrcRe(s.baseURL()).FindAllStringSubmatch(contentHTML, -1)
 	if len(matches) == 0 {
 		return contentHTML
 	}
@@ -463,6 +486,7 @@ func (s MediaService) DecorateContent(contentHTML string) string {
 	}
 
 	base := s.baseURL()
+	srcRe := mediaContentSrcRe(base)
 	images := make(map[string]contentImage, len(items))
 	for i := range items {
 		item := toMediaItem(&items[i], base)
@@ -482,7 +506,7 @@ func (s MediaService) DecorateContent(contentHTML string) string {
 		if src == nil {
 			return tag
 		}
-		key := mediaUploadsSrcRe.FindStringSubmatch(src[1])
+		key := srcRe.FindStringSubmatch(src[1])
 		if key == nil {
 			return tag
 		}
@@ -579,6 +603,28 @@ func (s MediaService) List(page, pageSize int) ([]MediaItem, int64, error) {
 // Item 把单条实体转换成媒体库输出。
 func (s MediaService) Item(media *model.Media) MediaItem {
 	return toMediaItem(media, s.baseURL())
+}
+
+// RefByID 返回媒体的最小引用（管理端编辑器回显封面 / OG 图用）。
+//
+// 记录不存在时返回 (nil, nil)：封面上挂着一个已被删掉的 id 不该让详情接口报错，
+// 前端把 null 当成"没设封面"即可。
+func (s MediaService) RefByID(id int64) (*model.MediaThumb, error) {
+	media, err := model.FindMediaByID(global.DB, id)
+	if err != nil {
+		if errors.Is(err, model.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("查询媒体失败: %w", err)
+	}
+	item := s.Item(media)
+	return &model.MediaThumb{
+		ID:     item.ID,
+		URL:    item.URL,
+		Alt:    item.Alt,
+		Width:  item.Width,
+		Height: item.Height,
+	}, nil
 }
 
 // Delete 删除未被引用的媒体；被引用时返回 code 2002 与清单（§10）。

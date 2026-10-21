@@ -430,8 +430,8 @@ for i in 1 2 3 4; do
 done; echo
 
 # 6) 关闭评论的文章 → 响应体 code 1001（HTTP 200）
-#    目前只能用接口或 SQL 关：UPDATE posts SET allow_comments = 0 WHERE slug = '<slug>';
-#    （管理端编辑器的「允许评论」开关排在 D14 管理端补全里一起做）
+#    在编辑器「分类与展示」里取消勾选「允许评论」并保存（D20 起有界面开关），
+#    或直接改库：UPDATE posts SET allow_comments = 0 WHERE slug = '<slug>';
 
 # 7) 标 spam 后从公开列表消失；标 deleted 是软删，管理端 status=deleted 仍能查到
 ```
@@ -628,12 +628,20 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/tags -H 'Content-Type: applicati
 curl -s -X DELETE http://127.0.0.1:8641/api/admin/tags/<id> -H "X-CSRF-Token: $CSRF"
 #    删除只解除关联，不删文章（`/admin/tags` 里 count 会变 0）
 
-# 2) 跳转：建一条老链接 → 公开端直接 301 且 hits+1
+# 2) 文章挂分类（D20）：编辑器「分类与展示」里勾标签、选系列；接口等价写法：
+curl -s -X PATCH http://127.0.0.1:8641/api/admin/posts/<id> -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"tagIds":[1,2],"seriesId":1,"seriesOrder":1,"coverMediaId":<mediaId>,"isPinned":true,"allowComments":false}'
+#    期望：详情回显 tagIds / cover / ogImage；列表项回显 tags 与 seriesName
+#    不存在的 tagId → code 1003（data 带 tagIds）；不存在的 seriesId → code 1003（data 带 seriesId）
+#    公开端随之生效：/api/tags 的 count ≥1、/tags/<slug> 有文章、/series/<slug> 有文章、相关文章不再为空
+
+# 3) 跳转：建一条老链接 → 公开端直接 301 且 hits+1
 curl -s -X POST http://127.0.0.1:8641/api/admin/redirects -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" -d '{"fromPath":"/posts/old-slug","toPath":"/posts/new-slug","status":301}'
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8640/posts/old-slug   # 301 → /posts/new-slug
 
-# 3) 附件：本地上传 → 公开 /go 直接下发且 clicks+1
+# 4) 附件：本地上传 → 公开 /go 直接下发且 clicks+1
 curl -s -X POST http://127.0.0.1:8641/api/admin/attachments/upload \
   -H "X-CSRF-Token: $CSRF" \
   -F "postId=<id>" -F "title=源码" -F "file=@/tmp/src.zip"
@@ -647,10 +655,10 @@ curl -s -X POST http://127.0.0.1:8641/api/admin/attachments -H 'Content-Type: ap
   -H "X-CSRF-Token: $CSRF" \
   -d '{"postId":<id>,"title":"外链","shareUrl":"https://example.com/src.zip","fileName":"src.zip","bytes":1024,"sort":0}'
 
-# 4) 存储管理：/admin/storage 应显示原图/变体/附件占用；孤儿清单可一键清掉
+# 5) 存储管理：/admin/storage 应显示原图/变体/附件占用；孤儿清单可一键清掉
 curl -s http://127.0.0.1:8641/api/admin/storage | head -c 400
 
-# 5) 设置：改时区 → content_version+1（公开读的 ETag 随之失效）
+# 6) 设置：改时区 → content_version+1（公开读的 ETag 随之失效）
 curl -s -X PUT http://127.0.0.1:8641/api/admin/settings -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $CSRF" -d '{"siteTimezone":"Asia/Shanghai","imgBaseUrl":""}'
 curl -s http://127.0.0.1:8640/api/site | head -c 200       # contentVersion 应比改之前大

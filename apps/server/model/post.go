@@ -51,6 +51,11 @@ type Post struct {
 	CommentCount   int          `gorm:"column:comment_count" json:"commentCount"`
 	Revision       int          `gorm:"column:revision" json:"revision"`
 	Lang           string       `gorm:"column:lang" json:"lang"`
+	// TagIDs 不是表列（标签在 post_tags 里）：管理端详情与写入回显用它，由 service 填充。
+	TagIDs []int64 `gorm:"-" json:"tagIds"`
+	// Cover / OGImage 也不是表列：管理端编辑器回显封面与 OG 图，由 service 按外键补齐。
+	Cover   *MediaThumb `gorm:"-" json:"cover"`
+	OGImage *MediaThumb `gorm:"-" json:"ogImage"`
 }
 
 // TableName 固定表名，避免 gorm 复数化。
@@ -72,6 +77,10 @@ type PostListItem struct {
 	PublishedAt   *dbtime.Unix `json:"publishedAt"`
 	CreatedAt     dbtime.Unix  `json:"createdAt"`
 	UpdatedAt     dbtime.Unix  `json:"updatedAt"`
+	// SeriesID / SeriesName 与 Tags 由 service 批量补齐（列表页要能看出文章归到哪一类）。
+	SeriesID   *int64       `json:"seriesId"`
+	SeriesName string       `json:"seriesName"`
+	Tags       []PostTagRef `json:"tags"`
 }
 
 // ListItem 把实体裁剪成列表项。
@@ -91,6 +100,8 @@ func (p Post) ListItem() PostListItem {
 		PublishedAt:   p.PublishedAt,
 		CreatedAt:     p.CreatedAt,
 		UpdatedAt:     p.UpdatedAt,
+		SeriesID:      p.SeriesID,
+		Tags:          make([]PostTagRef, 0),
 	}
 }
 

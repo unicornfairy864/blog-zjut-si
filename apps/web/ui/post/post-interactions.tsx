@@ -30,7 +30,7 @@ function describeActionError(caught: unknown): string {
  * 不会有真实数字，也不会因为计数变化而让整页重新渲染。
  */
 export function PostInteractions({ slug }: PostInteractionsProps) {
-  const { data, mutate } = useSWR<PostStats, ApiError>(
+  const { data, error, mutate } = useSWR<PostStats, ApiError>(
     swrKeys.postStats(slug),
     () => publicApi.postStats(slug),
     // 文章存在性已由 SSR 校验过；读接口失败再自动重试只会放大限流。
@@ -102,6 +102,20 @@ export function PostInteractions({ slug }: PostInteractionsProps) {
       {actionError ? (
         <span role="status" className="text-xs text-destructive">
           {actionError}
+        </span>
+      ) : null}
+
+      {/* 计数没取到就说清楚，并给一次重试：否则按钮永远是灰的，用户只会觉得"点了没反应"。 */}
+      {error && !data ? (
+        <span className="text-xs text-muted-foreground">
+          统计加载失败{" "}
+          <button
+            type="button"
+            className="underline underline-offset-4"
+            onClick={() => void mutate()}
+          >
+            重试
+          </button>
         </span>
       ) : null}
     </div>

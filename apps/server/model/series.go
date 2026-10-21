@@ -73,6 +73,23 @@ func CountSeries(db *gorm.DB) (int64, error) {
 	return total, nil
 }
 
+// FindSeriesNames 一次取回一批系列的名称，键为 id（管理端列表回显用，禁止逐篇查询）。
+func FindSeriesNames(db *gorm.DB, ids []int64) (map[int64]string, error) {
+	names := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return names, nil
+	}
+
+	items := make([]Series, 0, len(ids))
+	if err := db.Where("id IN ?", ids).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		names[item.ID] = item.Name
+	}
+	return names, nil
+}
+
 // ListSeriesPublishedPosts 返回某系列下全部已发布文章：
 // 按 series_order 升序、published_at 升序（agent.md §5）。
 func ListSeriesPublishedPosts(db *gorm.DB, seriesID int64) ([]Post, error) {

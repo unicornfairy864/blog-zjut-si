@@ -125,3 +125,59 @@ func FindTagsByPostIDs(db *gorm.DB, postIDs []int64) (map[int64][]PostTagRef, er
 	}
 	return result, nil
 }
+
+// ListTagIDsOfPost 返回某篇文章挂着的标签 id，按标签名称升序（管理端详情回显用）。
+func ListTagIDsOfPost(db *gorm.DB, postID int64) ([]int64, error) {
+	type row struct {
+		TagID int64 `gorm:"column:tag_id"`
+	}
+
+	rows := make([]row, 0)
+	err := db.Table("post_tags").
+		Select("post_tags.tag_id AS tag_id").
+		Joins("JOIN tags ON tags.id = post_tags.tag_id").
+		Where("post_tags.post_id = ?", postID).
+		Order("tags.name ASC, tags.id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]int64, 0, len(rows))
+	for _, item := range rows {
+		ids = append(ids, item.TagID)
+	}
+	return ids, nil
+}
+
+// FindExistingTagIDs 返回候选 id 中真实存在的那些（去重）。
+//
+// post_tags 没有外键约束，写库前必须自己确认标签存在，否则会留下永远查不出来的孤儿关联。
+func FindExistingTagIDs(db *gorm.DB, ids []int64) ([]int64, error) {
+	if len(ids) == 0 {
+		return []int64{}, nil
+	}
+	found := make([]int64, 0, len(ids))
+	if err := db.Model(&Tag{}).Where("id IN ?", ids).Pluck("id", &found).Error; err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// ReplacePostTags 用给定 id 集合整体替换某篇文章的标签（先删后插）。
+//
+// 调用方负责事务与"id 是否存在"的校验；tagIDs 允许为空（表示清空标签）。
+func ReplacePostTags(tx *gorm.DB, postID int64, tagIDs []int64) error {
+	if err := tx.Where("post_id = ?", postID).Delete(&PostTag{}).Error; err != nil {
+		return err
+	}
+	if len(tagIDs) == 0 {
+		return nil
+	}
+
+	rows := make([]PostTag, 0, len(tagIDs))
+	for _, tagID := range tagIDs {
+		rows = append(rows, PostTag{PostID: postID, TagID: tagID})
+	}
+	return tx.Create(&rows).Error
+}

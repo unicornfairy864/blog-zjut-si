@@ -38,6 +38,8 @@ type postCreateRequest struct {
 	SEODescription string `json:"seoDescription" binding:"max=500"`
 	CanonicalURL   string `json:"canonicalUrl" binding:"omitempty,max=500"`
 	Lang           string `json:"lang" binding:"omitempty,max=20"`
+	// tagIds 是替换式语义（见 service.normalizeTagIDs）；个数上限也在 service 校验。
+	TagIDs []int64 `json:"tagIds"`
 }
 
 // postUpdateRequest 是更新入参；nil 字段表示不修改。
@@ -62,6 +64,8 @@ type postUpdateRequest struct {
 	Lang           *string `json:"lang" binding:"omitempty,max=20"`
 	Status         *string `json:"status"`
 	CreateRedirect bool    `json:"createRedirect"`
+	// tagIds 用指针：nil = 不改标签，`[]` = 清空，非空 = 整体替换。
+	TagIDs *[]int64 `json:"tagIds"`
 }
 
 // postPublishRequest 是发布入参；note 写入 post_revisions.note。
@@ -104,6 +108,11 @@ func (PostApi) List(c *gin.Context) {
 	items := make([]model.PostListItem, 0, len(posts))
 	for _, post := range posts {
 		items = append(items, post.ListItem())
+	}
+	// 列表要能看出文章归到哪个系列、挂了哪些标签：批量补齐，不逐篇打库。
+	if err := service.ServiceGroupApp.Post.AttachTaxonomy(items); err != nil {
+		response.FailWithError(c, err)
+		return
 	}
 	response.OkWithPage(c, items, total, page.Page, page.PageSize)
 }
@@ -154,6 +163,7 @@ func (PostApi) Create(c *gin.Context) {
 		SEODescription: req.SEODescription,
 		CanonicalURL:   req.CanonicalURL,
 		Lang:           req.Lang,
+		TagIDs:         req.TagIDs,
 	}, actorFrom(c))
 	if err != nil {
 		response.FailWithError(c, err)
@@ -229,6 +239,7 @@ func (PostApi) update(c *gin.Context, full bool) {
 		Lang:           req.Lang,
 		Status:         req.Status,
 		CreateRedirect: req.CreateRedirect,
+		TagIDs:         req.TagIDs,
 	}, actorFrom(c))
 	if err != nil {
 		response.FailWithError(c, err)

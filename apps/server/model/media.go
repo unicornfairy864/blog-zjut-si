@@ -48,6 +48,18 @@ type Media struct {
 // TableName 固定表名。
 func (Media) TableName() string { return "media" }
 
+// MediaThumb 是媒体的最小引用：管理端编辑器回显封面 / OG 图只需要 id 与缩略图地址。
+//
+// 单独一个结构是为了不把整个 Media（含 storage_key 等内部字段）塞进文章详情里；
+// 注意别与下面的 MediaRef（"仍被谁引用"的清单项）混用。
+type MediaThumb struct {
+	ID     int64  `json:"id"`
+	URL    string `json:"url"`
+	Alt    string `json:"alt"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
 // CreateMedia 插入媒体记录并回填主键。
 func CreateMedia(db *gorm.DB, media *Media) error {
 	return db.Create(media).Error

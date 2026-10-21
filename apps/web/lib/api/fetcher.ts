@@ -1,6 +1,6 @@
 import { apiBaseUrl } from "@/lib/constants/env";
 
-import { CSRF_HEADER, getCSRFToken } from "./csrf";
+import { CSRF_HEADER, clearCSRFToken, getCSRFToken } from "./csrf";
 
 /** 统一响应信封（agent.md §5）。 */
 export interface ApiEnvelope<T> {
@@ -45,6 +45,53 @@ export interface ApiRequestInit
   body?: BodyInit;
   json?: unknown;
   timeoutMs?: number;
+}
+
+/** 字段级校验错误（§5：失败响应的 `data` 是 `[{field,message}]`）。 */
+export interface ApiFieldError {
+  field: string;
+  message: string;
+}
+
+/**
+ * 从 ApiError 里取出字段错误数组。
+ *
+ * `data` 只有校验失败时才是这个形状（无附加数据是 `null`、媒体引用冲突是清单），
+ * 所以这里做形状判断而不是强转。
+ */
+export function apiFieldErrors(error: unknown): ApiFieldError[] {
+  if (!(error instanceof ApiError) || !Array.isArray(error.details)) {
+    return [];
+  }
+
+  const fields: ApiFieldError[] = [];
+  for (const item of error.details) {
+    if (item === null || typeof item !== "object") {
+      continue;
+    }
+    const candidate = item as Partial<ApiFieldError>;
+    if (typeof candidate.field === "string" && typeof candidate.message === "string") {
+      fields.push({ field: candidate.field, message: candidate.message });
+    }
+  }
+  return fields;
+}
+
+/**
+ * 把一次失败转成给用户看的一句话。
+ *
+ * 有字段错误就逐条列出来（`field：message`），否则退回信封 `msg`：
+ * 只显示"参数校验失败"等于什么都没说，用户无从下手。
+ */
+export function describeApiError(
+  error: unknown,
+  fallback = "请求失败，请稍后重试",
+): string {
+  const fields = apiFieldErrors(error);
+  if (fields.length > 0) {
+    return fields.map((item) => `${item.field}：${item.message}`).join("；");
+  }
+  return error instanceof ApiError ? error.message : fallback;
 }
 
 /**
@@ -117,6 +164,9 @@ export async function apiFetch<T>(
   // 业务成败只看信封里的 code：v1.14 起失败也是 HTTP 200，`!response.ok`
   // 只兜住"信封 + 非 2xx"的意外组合（例如 NoRoute 的 404 + 1002）。
   if (envelope.code !== 0 || !response.ok) {
+    if (envelope.code === 1000) {
+      handleSessionExpired(path);
+    }
     throw new ApiError({
       code: envelope.code,
       status: response.status,
@@ -125,6 +175,26 @@ export async function apiFetch<T>(
     });
   }
   return envelope.data;
+}
+
+/**
+ * 会话过期时的统一处理：清掉 CSRF 并回登录页。
+ *
+ * 管理页是 CSR：会话过期后如果只弹一句"未登录或会话已失效"，用户会一直点同一个按钮。
+ * 只在浏览器里、且只对管理接口生效（公开接口不该把人踢到后台登录页）。
+ */
+function handleSessionExpired(path: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (!path.startsWith("/api/admin/") || path.startsWith("/api/admin/auth/login")) {
+    return;
+  }
+  if (window.location.pathname.startsWith("/admin/login")) {
+    return;
+  }
+  clearCSRFToken();
+  window.location.assign("/admin/login");
 }
 
 /** 拼出完整 URL；已经是绝对地址时直接使用。 */

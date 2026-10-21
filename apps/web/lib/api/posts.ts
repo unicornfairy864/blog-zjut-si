@@ -3,6 +3,21 @@ import { apiFetch } from "./fetcher";
 /** 文章状态（agent.md §4）。 */
 export type PostStatus = "draft" | "scheduled" | "published" | "archived";
 
+/** 挂在文章上的标签引用（公开端与列表项都用这个形状）。 */
+export interface PostTagRef {
+  name: string;
+  slug: string;
+}
+
+/** 媒体的最小引用（编辑器回显封面 / OG 图用）。 */
+export interface MediaThumb {
+  id: number;
+  url: string;
+  alt: string;
+  width: number;
+  height: number;
+}
+
 /** 列表项：服务端裁剪过的轻量结构，不含正文。 */
 export interface PostListItem {
   id: number;
@@ -19,6 +34,12 @@ export interface PostListItem {
   publishedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  /** 所属系列；没归系列时为 null。 */
+  seriesId: number | null;
+  /** 系列名称；服务端批量补齐，没归系列时为空串。 */
+  seriesName: string;
+  /** 标签；服务端批量补齐，没有标签时是空数组。 */
+  tags: PostTagRef[];
 }
 
 /** 详情：编辑器需要完整正文与 SEO 字段。 */
@@ -50,6 +71,12 @@ export interface PostDetail {
   commentCount: number;
   revision: number;
   lang: string;
+  /** 标签 id 列表；空数组表示没有标签。 */
+  tagIds: number[];
+  /** 封面图的回显（服务端按 coverMediaId 补齐）；没设封面为 null。 */
+  cover: MediaThumb | null;
+  /** OG 图的回显；没设为 null。 */
+  ogImage: MediaThumb | null;
 }
 
 /** 分页信封（GET /api/admin/posts）。 */
@@ -72,6 +99,16 @@ export interface PostWriteInput {
   isPinned?: boolean;
   allowComments?: boolean;
   createRedirect?: boolean;
+  lang?: string;
+  /** 标签 id 数组，**替换式**：传了就整体替换，传 `[]` 清空。 */
+  tagIds?: number[];
+  /** 所属系列；`0` 表示清空（置 NULL）。 */
+  seriesId?: number;
+  seriesOrder?: number;
+  /** 封面图；`0` 表示清空。 */
+  coverMediaId?: number;
+  /** OG 图；`0` 表示清空。 */
+  ogMediaId?: number;
 }
 
 /** POST /api/admin/posts/preview 的结果；与发布落库的渲染同源。 */

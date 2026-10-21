@@ -361,8 +361,24 @@ PV 打点。请求体：
 | `POST /api/admin/posts/preview` | 渲染未保存正文，不落库；与发布结果同源 |
 
 写入字段：`title`、`slug`、`excerpt`、`contentMd`、`seoTitle`、`seoDescription`、`canonicalUrl`、
-`coverMediaId`、`ogMediaId`、`seriesId`、`seriesOrder`、`isPinned`、`allowComments`、`lang`；
+`coverMediaId`、`ogMediaId`、`seriesId`、`seriesOrder`、`isPinned`、`allowComments`、`lang`、`tagIds`；
 `PATCH` 另支持 `status`（仅 `archived` 归档、`draft` 取消发布）与 `createRedirect`（改 slug 时写 301）。
+
+分类字段的口径（D20 补齐，agent.md §5「内容管理口径」）：
+
+- `tagIds` 是**整数数组**，语义是**替换**：传 `[1,2]` 就把该文标签整体改成这两个；传 `[]` 清空；不传字段 = 不改。
+  服务端自动去重、忽略 `≤0`，最多 20 个（超限 → `200 + code 1003`）。**id 必须真实存在**，
+  否则 `200 + code 1003`，`data` 为 `[{field:"tagIds",message:…}]`。
+- `seriesId` 传 `0` 表示清空（置 NULL）；指向不存在的系列 → `200 + code 1003`（`data` 带 `seriesId`）。
+  `seriesOrder` 是系列内排序，`≥0`。
+- 详情（`GET /posts/{id}`）回显 `tagIds`（`[]` 表示没有标签）与 `cover` / `ogImage`
+  （`{id,url,alt,width,height}`，编辑器显示已选封面用；外键指向的图已被删除时为 `null`）；
+  列表项回显 `tags[{name,slug}]` 与 `seriesName`。
+
+```json
+// PATCH /api/admin/posts/3  →  只提交要改的项
+{ "tagIds": [1, 4], "seriesId": 2, "seriesOrder": 1, "isPinned": true, "allowComments": false }
+```
 
 文章错误码：
 

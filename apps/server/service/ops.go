@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/global"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model"
@@ -31,10 +32,11 @@ func (s OpsService) Jobs(status string, page, pageSize int) ([]model.Job, int64,
 	return jobs, total, nil
 }
 
-// EnqueueJob 手动投递周期任务（§5：只允许 cleanup / backup / link_check）。
+// EnqueueJob 手动投递任务（§5：只允许 model.ManualJobTypes 里的类型）。
 func (s OpsService) EnqueueJob(jobType string, actor PostActor) (*model.Job, error) {
 	if !slices.Contains(model.ManualJobTypes, jobType) {
-		return nil, errs.New(errs.ErrorValidation, "只允许手动投递 cleanup / backup / link_check")
+		return nil, errs.New(errs.ErrorValidation,
+			"只允许手动投递 "+strings.Join(model.ManualJobTypes, " / "))
 	}
 
 	now := dbtime.Now()

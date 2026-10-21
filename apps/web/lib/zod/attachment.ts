@@ -3,14 +3,21 @@ import { z } from "zod";
 /**
  * 数字输入框统一按字符串收集（HTML input 的 value 本来就是字符串），
  * 提交前再转 number；空串表示"不传这个字段"，由服务端保留原值或落默认值。
+ *
+ * `max` 与服务端上限对齐（例如 `sort` 是 0–99999）：前端拦下来比让用户吃一次
+ * `code 1003` 好——那个错误只会在表单顶部蹦一句"参数校验失败"。
  */
-const optionalInteger = (label: string) =>
+const optionalInteger = (label: string, max?: number) =>
   z
     .string()
     .trim()
     .refine(
       (value) => value === "" || /^\d+$/.test(value),
       `${label}必须是非负整数`,
+    )
+    .refine(
+      (value) => value === "" || max === undefined || Number(value) <= max,
+      `${label}不能超过 ${max ?? 0}`,
     );
 
 /**
@@ -50,7 +57,7 @@ function buildAttachmentFormSchema(requireShareUrl: boolean) {
       .min(1, "请输入附件标题")
       .max(200, "标题不能超过 200 个字符"),
     shareUrl: shareUrlField(requireShareUrl),
-    fileName: z.string().trim().max(255, "文件名不能超过 255 个字符"),
+    fileName: z.string().trim().max(200, "文件名不能超过 200 个字符"),
     bytes: optionalInteger("文件大小"),
     sha256: z
       .string()
@@ -60,8 +67,8 @@ function buildAttachmentFormSchema(requireShareUrl: boolean) {
         (value) => value === "" || /^[0-9a-fA-F]+$/.test(value),
         "sha256 只能是十六进制字符",
       ),
-    version: z.string().trim().max(64, "版本号不能超过 64 个字符"),
-    sort: optionalInteger("排序值"),
+    version: z.string().trim().max(50, "版本号不能超过 50 个字符"),
+    sort: optionalInteger("排序值", 99999),
   });
 }
 

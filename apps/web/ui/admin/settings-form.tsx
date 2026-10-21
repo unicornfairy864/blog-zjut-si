@@ -6,11 +6,13 @@ import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
 import type { ApiError } from "@/lib/api/fetcher";
+import { describeApiError } from "@/lib/api/fetcher";
 import {
   adminSettingsApi,
   type AdminNotify,
   type AdminNotifyChannel,
   type AdminSettings,
+  type AdminSettingsInput,
 } from "@/lib/api/settings";
 import { swrKeys } from "@/lib/swr/keys";
 import { formatBytes, formatDateTime } from "@/lib/utils";
@@ -163,7 +165,7 @@ export function SettingsForm() {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, dirtyFields },
   } = useForm<SettingsValues>({
     resolver: zodResolver(settingsSchema),
     defaultValues: EMPTY_VALUES,
@@ -197,9 +199,8 @@ export function SettingsForm() {
     setSaved(null);
     const { notify } = values;
     try {
-      await adminSettingsApi.update({
-        imgBaseUrl: values.imgBaseUrl,
-        siteTimezone: values.siteTimezone,
+      // 只提交真正改动的内容类字段：只调告警时不该让 content_version 白涨一次。
+      const payload: AdminSettingsInput = {
         notify: {
           enabled: notify.enabled,
           channel: notify.channel,
@@ -213,11 +214,23 @@ export function SettingsForm() {
           diskThresholdPercent: notify.diskThresholdPercent,
           certExpireDays: notify.certExpireDays,
         },
-      });
+      };
+      if (dirtyFields.imgBaseUrl) {
+        payload.imgBaseUrl = values.imgBaseUrl;
+      }
+      if (dirtyFields.siteTimezone) {
+        payload.siteTimezone = values.siteTimezone;
+      }
+
+      await adminSettingsApi.update(payload);
       await mutate();
-      setSaved("已保存（公开读的 ETag 已随之失效）");
+      setSaved(
+        payload.imgBaseUrl !== undefined || payload.siteTimezone !== undefined
+          ? "已保存（公开读的 ETag 已随之失效）"
+          : "已保存",
+      );
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "保存失败，请稍后重试");
+      setError(describeApiError(caught, "保存失败，请稍后重试"));
     }
   }
 
@@ -230,7 +243,7 @@ export function SettingsForm() {
       await adminSettingsApi.testNotify();
       setSaved("测试告警已发出，去目标通道确认是否收到");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "发送失败，请稍后重试");
+      setError(describeApiError(caught, "发送失败，请稍后重试"));
     } finally {
       setTesting(false);
     }

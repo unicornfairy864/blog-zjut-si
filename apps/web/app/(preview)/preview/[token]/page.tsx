@@ -85,7 +85,11 @@ export default async function PreviewPage({ params }: PreviewPageProps) {
     if (isApiCode(error, 1002)) {
       notFound();
     }
+    if (isApiCode(error, 2006)) {
+      return <ExpiredPreview />;
+    }
     if (isApiCode(error, 1007)) {
+      // 文章已被归档 / 删除：同样按"看不到了"处理（预览链接本身是好的）。
       return <ExpiredPreview />;
     }
     // 其余错误（网络 / 5xx）交给 error.tsx 兜底，不要伪装成"链接失效"。

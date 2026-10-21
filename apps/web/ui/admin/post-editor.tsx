@@ -7,14 +7,15 @@ import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import useSWR from "swr";
 
-import { ApiError } from "@/lib/api/fetcher";
-import { adminMediaApi } from "@/lib/api/media";
+import { ApiError, describeApiError } from "@/lib/api/fetcher";
+import { adminMediaApi, type MediaItem } from "@/lib/api/media";
 import {
   adminPostApi,
   type PostDetail,
   type PostPreview,
   type PostWriteInput,
 } from "@/lib/api/posts";
+import { adminTaxonomyApi, type AdminSeries, type AdminTag } from "@/lib/api/taxonomy";
 import { swrKeys } from "@/lib/swr/keys";
 import { cn, formatTime } from "@/lib/utils";
 import { postEditorSchema, type PostEditorValues } from "@/lib/zod/post";
@@ -24,6 +25,7 @@ import {
   withImageWidth,
   type MarkdownEdit,
 } from "@/ui/admin/editor-toolbar";
+import { FieldSelect } from "@/ui/admin/field-select";
 import { MediaPicker } from "@/ui/admin/media-picker";
 import { PostPreviewPane } from "@/ui/admin/post-preview";
 import { PostPublishing } from "@/ui/admin/post-publishing";
@@ -42,6 +44,14 @@ const EMPTY_VALUES: PostEditorValues = {
   seoTitle: "",
   seoDescription: "",
   canonicalUrl: "",
+  tagIds: [],
+  seriesId: null,
+  seriesOrder: 0,
+  coverMediaId: null,
+  ogMediaId: null,
+  isPinned: false,
+  allowComments: true,
+  lang: "",
 };
 
 /** 自动保存的防抖间隔（agent.md §8：30s 或失焦）。 */
@@ -66,6 +76,14 @@ function toFormValues(post: PostDetail): PostEditorValues {
     seoTitle: post.seoTitle,
     seoDescription: post.seoDescription,
     canonicalUrl: post.canonicalUrl,
+    tagIds: post.tagIds ?? [],
+    seriesId: post.seriesId,
+    seriesOrder: post.seriesOrder,
+    coverMediaId: post.coverMediaId,
+    ogMediaId: post.ogMediaId,
+    isPinned: post.isPinned,
+    allowComments: post.allowComments,
+    lang: post.lang,
   };
 }
 
@@ -84,11 +102,82 @@ function toWriteInput(
     seoDescription: values.seoDescription.trim(),
     canonicalUrl: values.canonicalUrl.trim(),
     createRedirect,
+    // 分类与展示字段：这些此前只有后端支持，编辑器没有入口（D20 补齐）。
+    tagIds: values.tagIds,
+    seriesId: values.seriesId ?? 0,
+    seriesOrder: values.seriesOrder,
+    coverMediaId: values.coverMediaId ?? 0,
+    ogMediaId: values.ogMediaId ?? 0,
+    isPinned: values.isPinned,
+    allowComments: values.allowComments,
+    lang: values.lang.trim(),
   };
 }
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
+}
+
+/** 封面 / OG 图这类"单张图"槽位：显示当前图 + 从媒体库选一张 + 清除。 */
+interface CoverSlotProps {
+  label: string;
+  hint: string;
+  thumb: { id: number; url: string; alt?: string } | null;
+  onSelect: (item: MediaItem) => void;
+  onClear: () => void;
+}
+
+function CoverSlot({ label, hint, thumb, onSelect, onClear }: CoverSlotProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium">{label}</span>
+        {thumb ? (
+          <Button type="button" size="sm" variant="ghost" onClick={onClear}>
+            清除
+          </Button>
+        ) : null}
+      </div>
+
+      {thumb ? (
+        <div className="flex items-center gap-3 rounded-md border border-border p-2">
+          <img
+            src={thumb.url}
+            alt={thumb.alt || label}
+            className="h-16 w-24 rounded object-cover"
+          />
+          <span className="text-xs text-muted-foreground">媒体 #{thumb.id}</span>
+        </div>
+      ) : (
+        <p className="rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+          未设置
+        </p>
+      )}
+
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        {open ? "收起媒体库" : "从媒体库选择"}
+      </Button>
+
+      {open ? (
+        <MediaPicker
+          selectedId={thumb?.id ?? null}
+          onPick={(item) => {
+            onSelect(item);
+            setOpen(false);
+          }}
+        />
+      ) : null}
+
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
 }
 
 /**
@@ -141,6 +230,20 @@ export function PostEditor({ postId }: { postId: number | null }) {
     () => adminPostApi.get(currentId as number),
   );
 
+  // 分类选项：标签与系列都是全量列表（管理端不分页），挂在编辑器里直接勾/选。
+  const { data: tagData } = useSWR<{ list: AdminTag[] }, ApiError>(
+    swrKeys.adminTags,
+    () => adminTaxonomyApi.tags(),
+  );
+  const { data: seriesData } = useSWR<{ list: AdminSeries[] }, ApiError>(
+    swrKeys.adminSeries,
+    () => adminTaxonomyApi.series(),
+  );
+
+  // 刚选中的封面 / OG 图：拿到 id 之后要立刻能看见图，不能等下一次保存回填。
+  const [coverPreview, setCoverPreview] = useState<MediaItem | null>(null);
+  const [ogPreview, setOgPreview] = useState<MediaItem | null>(null);
+
   // 只在首次拿到该文章时填充表单；保存后不要被 SWR 的旧缓存覆盖。
   useEffect(() => {
     if (!data || loadedRef.current === data.id) {
@@ -150,6 +253,9 @@ export function PostEditor({ postId }: { postId: number | null }) {
     setPost(data);
     setLastSavedAt(data.updatedAt);
     setSavedSlug(data.slug);
+    // 服务端回显的封面 / OG 图优先于本地预览（保存后以库里的为准）。
+    setCoverPreview(null);
+    setOgPreview(null);
     reset(toFormValues(data));
   }, [data, reset]);
 
@@ -201,7 +307,8 @@ export function PostEditor({ postId }: { postId: number | null }) {
       }
       return saved;
     } catch (caught) {
-      setSaveError(errorMessage(caught, "保存失败，请稍后重试"));
+      // 校验失败时服务端在 data 里带字段错误，只显示"参数校验失败"等于没说。
+      setSaveError(describeApiError(caught, "保存失败，请稍后重试"));
       return null;
     } finally {
       savingRef.current = false;
@@ -228,6 +335,24 @@ export function PostEditor({ postId }: { postId: number | null }) {
     if (formState.isDirty) {
       void persistRef.current({ silent: true });
     }
+  };
+
+  /** 勾/取消一个标签；上限与服务端一致（20 个），超了直接不勾。 */
+  const toggleTag = (tagId: number) => {
+    const current = getValues("tagIds");
+    if (current.includes(tagId)) {
+      setValue(
+        "tagIds",
+        current.filter((id) => id !== tagId),
+        { shouldDirty: true },
+      );
+      return;
+    }
+    if (current.length >= 20) {
+      setSaveError("一篇文章最多 20 个标签。");
+      return;
+    }
+    setValue("tagIds", [...current, tagId], { shouldDirty: true });
   };
 
   // 把 Markdown 编辑写进表单，并把光标/选区恢复到插入内容上（工具栏、上传、媒体库共用）。
@@ -773,6 +898,167 @@ export function PostEditor({ postId }: { postId: number | null }) {
             </section>
           ) : null}
         </div>
+
+        <details className="rounded-lg border border-border p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            分类与展示
+          </summary>
+          <div className="mt-4 space-y-5">
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">
+                标签（已选 {values.tagIds.length} 个，最多 20 个）
+              </legend>
+              {tagData && tagData.list.length > 0 ? (
+                <ul className="flex max-h-52 flex-wrap gap-x-4 gap-y-2 overflow-y-auto rounded-md border border-border p-3">
+                  {tagData.list.map((tag) => {
+                    const checked = values.tagIds.includes(tag.id);
+                    return (
+                      <li key={tag.id}>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={checked}
+                            onChange={() => toggleTag(tag.id)}
+                          />
+                          {tag.name}
+                          <span className="text-xs text-muted-foreground">
+                            {tag.count}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+                  还没有标签，先去{" "}
+                  <Link href="/admin/tags" className="underline underline-offset-4">
+                    标签管理
+                  </Link>{" "}
+                  建一个。
+                </p>
+              )}
+            </fieldset>
+
+            <div className="grid gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <div className="space-y-2">
+                <Label htmlFor="post-series">系列</Label>
+                <FieldSelect
+                  id="post-series"
+                  value={values.seriesId === null ? "" : String(values.seriesId)}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setValue("seriesId", next === "" ? null : Number(next), {
+                      shouldDirty: true,
+                    });
+                  }}
+                >
+                  <option value="">不归系列</option>
+                  {(seriesData?.list ?? []).map((series) => (
+                    <option key={series.id} value={series.id}>
+                      {series.name}（{series.count}）
+                    </option>
+                  ))}
+                </FieldSelect>
+                <p className="text-xs text-muted-foreground">
+                  一篇文章只属于一个系列；系列页按下面的序号排序。
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="post-series-order">系列内序号</Label>
+                <Input
+                  id="post-series-order"
+                  type="number"
+                  min={0}
+                  aria-invalid={formState.errors.seriesOrder ? true : undefined}
+                  {...register("seriesOrder", { valueAsNumber: true })}
+                />
+                {formState.errors.seriesOrder ? (
+                  <p className="text-xs text-destructive">
+                    {formState.errors.seriesOrder.message}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <CoverSlot
+                label="封面图"
+                hint="用于公开列表的封面与 OG 卡片（取 1600 档变体）。"
+                thumb={
+                  coverPreview
+                    ? { id: coverPreview.id, url: coverPreview.url, alt: coverPreview.alt }
+                    : (post?.cover ?? null)
+                }
+                onSelect={(item) => {
+                  setCoverPreview(item);
+                  setValue("coverMediaId", item.id, { shouldDirty: true });
+                }}
+                onClear={() => {
+                  setCoverPreview(null);
+                  setValue("coverMediaId", null, { shouldDirty: true });
+                }}
+              />
+
+              <CoverSlot
+                label="OG 图"
+                hint="社交卡片专用；留空则用封面图。"
+                thumb={
+                  ogPreview
+                    ? { id: ogPreview.id, url: ogPreview.url, alt: ogPreview.alt }
+                    : (post?.ogImage ?? null)
+                }
+                onSelect={(item) => {
+                  setOgPreview(item);
+                  setValue("ogMediaId", item.id, { shouldDirty: true });
+                }}
+                onClear={() => {
+                  setOgPreview(null);
+                  setValue("ogMediaId", null, { shouldDirty: true });
+                }}
+              />
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  {...register("isPinned")}
+                />
+                置顶
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  {...register("allowComments")}
+                />
+                允许评论
+              </label>
+              <div className="space-y-2">
+                <Label htmlFor="post-lang">语言标签（lang）</Label>
+                <Input
+                  id="post-lang"
+                  placeholder="zh-CN"
+                  aria-invalid={formState.errors.lang ? true : undefined}
+                  {...register("lang")}
+                />
+                {formState.errors.lang ? (
+                  <p className="text-xs text-destructive">
+                    {formState.errors.lang.message}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    留空按服务端默认 zh-CN。
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </details>
 
         <details className="rounded-lg border border-border p-4">
           <summary className="cursor-pointer text-sm font-medium">

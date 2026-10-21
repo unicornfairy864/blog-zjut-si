@@ -28,7 +28,8 @@ function buildCsp(nonce: string): string {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    // `https:` 是必须的：友链头像是外站图片，`imgBaseUrl` 也可以配成跨源域名（§9 只约束 script/style）。
+    "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     `connect-src 'self'${isDev ? " ws: wss:" : ""}`,
     "object-src 'none'",

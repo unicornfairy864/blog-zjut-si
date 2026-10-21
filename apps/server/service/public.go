@@ -228,7 +228,11 @@ func (s PublicService) Page(slug string) (model.PublicPageDetail, error) {
 	if page.DeletedAt != nil {
 		return model.PublicPageDetail{}, errs.New(errs.ErrorGone, "页面已删除")
 	}
-	return page.PublicDetail(), nil
+	// 正文图片的 srcset /「查看原图」链接与文章详情同一处补（§10 / §11）：
+	// 静态页也有插图，不走这一步就没有响应式属性。
+	detail := page.PublicDetail()
+	detail.ContentHTML = ServiceGroupApp.Media.DecorateContent(detail.ContentHTML)
+	return detail, nil
 }
 
 // Pages 返回全部未删除的静态页清单（公开 sitemap 用；不出正文）。

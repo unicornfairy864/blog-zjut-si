@@ -192,7 +192,9 @@ export function StatsDashboard() {
         </Alert>
       ) : null}
 
-      {overviewLoading && !overview && dailyLoading && !daily ? <Loading /> : null}
+      {(overviewLoading && !overview) || (dailyLoading && !daily) ? (
+        <Loading />
+      ) : null}
 
       {overview ? (
         <>

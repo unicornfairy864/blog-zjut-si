@@ -36,13 +36,15 @@ func NewPublicEngine(proxy *edge.Proxy) *gin.Engine {
 			middleware.RateLimit(middleware.NewCommentLimiter(), nil),
 			v1.ApiGroupApp.Public.Comment.Create)
 
-		// 互动与统计（D12）：点赞两个方向都幂等，10 次 / 分钟 / visitor；
+		// 互动与统计（D12）：点赞两个方向都幂等，**合计** 10 次 / 分钟 / visitor
+		// （两个路由共用同一个桶；各建一个会变成 20 次，与 §5 不符）。
 		// stats 是访客态读（no-store），打点写 PV 明细（§5 / §16 G5）。
+		likeLimiter := middleware.NewLikeLimiter()
 		api.POST("/posts/:slug/like",
-			middleware.RateLimit(middleware.NewLikeLimiter(), middleware.VisitorKey),
+			middleware.RateLimit(likeLimiter, middleware.VisitorKey),
 			v1.ApiGroupApp.Public.Interaction.Like)
 		api.DELETE("/posts/:slug/like",
-			middleware.RateLimit(middleware.NewLikeLimiter(), middleware.VisitorKey),
+			middleware.RateLimit(likeLimiter, middleware.VisitorKey),
 			v1.ApiGroupApp.Public.Interaction.Unlike)
 		api.GET("/posts/:slug/stats", v1.ApiGroupApp.Public.Interaction.Stats)
 		api.POST("/events/view", v1.ApiGroupApp.Public.Interaction.View)

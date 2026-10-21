@@ -17,6 +17,7 @@ import (
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/dbtime"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/errs"
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/request"
 )
 
 // PostService 处理文章 CRUD、状态机与版本快照（agent.md §6 / §11）。
@@ -43,6 +44,8 @@ const (
 	postLangMaxLen           = 20
 	// postSlugCollisionRetries 是自动 slug 撞车后的编号重试上限。
 	postSlugCollisionRetries = 50
+	// postTagMaxCount 是一篇文章最多能挂的标签数（§5「内容管理口径」）。
+	postTagMaxCount = 20
 )
 
 var (
@@ -82,11 +85,14 @@ type PostCreateInput struct {
 	SEODescription string
 	CanonicalURL   string
 	Lang           string
+	// TagIDs 是这篇文章的标签（替换式；空数组 = 没有标签）。
+	TagIDs []int64
 }
 
 // PostUpdateInput 是更新入参；nil 表示"不修改"，与 PATCH 语义一致。
 //
-// coverMediaId / ogMediaId / seriesId 传 0 表示显式清空（置 NULL）。
+// coverMediaId / ogMediaId / seriesId 传 0 表示显式清空（置 NULL）；
+// TagIDs 是**整体替换**语义：nil = 不改，`[]` = 清空，非空 = 换成这些标签。
 type PostUpdateInput struct {
 	Slug           *string
 	Title          *string
@@ -104,6 +110,7 @@ type PostUpdateInput struct {
 	Lang           *string
 	Status         *string
 	CreateRedirect bool
+	TagIDs         *[]int64
 }
 
 // Create 新建草稿；slug 未填时按标题生成，中文标题退化为时间戳（§11）。
@@ -129,6 +136,12 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 		lang = model.DefaultPostLang
 	}
 	if err := validateCanonicalURL(strings.TrimSpace(in.CanonicalURL)); err != nil {
+		return nil, err
+	}
+
+	// 标签先归一化（去重、丢非正数、限个数），存在性在事务里连着写一起校验。
+	tagIDs, err := normalizeTagIDs(in.TagIDs)
+	if err != nil {
 		return nil, err
 	}
 
@@ -158,7 +171,16 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 	}
 
 	if err := global.DB.Transaction(func(tx *gorm.DB) error {
+		if err := ensureSeriesExists(tx, post.SeriesID); err != nil {
+			return err
+		}
+		if err := ensureTagsExist(tx, tagIDs); err != nil {
+			return err
+		}
 		if err := model.CreatePost(tx, post); err != nil {
+			return err
+		}
+		if err := model.ReplacePostTags(tx, post.ID, tagIDs); err != nil {
 			return err
 		}
 		return ServiceGroupApp.Audit.WriteTx(tx, AuditInput{
@@ -175,6 +197,7 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 		}
 		return nil, fmt.Errorf("创建文章失败: %w", err)
 	}
+	post.TagIDs = tagIDs
 	return post, nil
 }
 
@@ -202,7 +225,69 @@ func (s PostService) Get(id int64) (*model.Post, error) {
 	if err != nil {
 		return nil, s.notFoundOr(err, "查询文章失败")
 	}
+	tagIDs, err := model.ListTagIDsOfPost(global.DB, post.ID)
+	if err != nil {
+		return nil, fmt.Errorf("查询文章标签失败: %w", err)
+	}
+	post.TagIDs = tagIDs
+
+	// 封面与 OG 图回显：编辑器要有图可看，否则"已设封面"在界面上看不出来。
+	if post.CoverMediaID != nil {
+		if ref, refErr := ServiceGroupApp.Media.RefByID(*post.CoverMediaID); refErr != nil {
+			return nil, refErr
+		} else {
+			post.Cover = ref
+		}
+	}
+	if post.OGMediaID != nil {
+		if ref, refErr := ServiceGroupApp.Media.RefByID(*post.OGMediaID); refErr != nil {
+			return nil, refErr
+		} else {
+			post.OGImage = ref
+		}
+	}
 	return post, nil
+}
+
+// AttachTaxonomy 给一页文章列表补上标签与系列名（管理端列表用）。
+//
+// 批量查询：一次取回整页的标签与系列名，不逐篇打库（§12）。
+func (s PostService) AttachTaxonomy(items []model.PostListItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	postIDs := make([]int64, 0, len(items))
+	seriesIDs := make([]int64, 0, len(items))
+	seenSeries := make(map[int64]struct{}, len(items))
+	for _, item := range items {
+		postIDs = append(postIDs, item.ID)
+		if item.SeriesID != nil {
+			if _, ok := seenSeries[*item.SeriesID]; !ok {
+				seenSeries[*item.SeriesID] = struct{}{}
+				seriesIDs = append(seriesIDs, *item.SeriesID)
+			}
+		}
+	}
+
+	tags, err := model.FindTagsByPostIDs(global.DB, postIDs)
+	if err != nil {
+		return fmt.Errorf("查询文章标签失败: %w", err)
+	}
+	names, err := model.FindSeriesNames(global.DB, seriesIDs)
+	if err != nil {
+		return fmt.Errorf("查询系列名称失败: %w", err)
+	}
+
+	for i := range items {
+		if refs, ok := tags[items[i].ID]; ok {
+			items[i].Tags = refs
+		}
+		if items[i].SeriesID != nil {
+			items[i].SeriesName = names[*items[i].SeriesID]
+		}
+	}
+	return nil
 }
 
 // Update 局部更新文章；nil 字段保持不变。
@@ -340,6 +425,19 @@ func (s PostService) Update(id int64, in PostUpdateInput, actor PostActor) (*mod
 		changed = append(changed, "lang")
 	}
 
+	// 标签是替换式语义：nil = 不改，[] = 清空，非空 = 换成这些（存在性在事务里校验）。
+	tagIDsChanged := false
+	var tagIDs []int64
+	if in.TagIDs != nil {
+		normalized, err := normalizeTagIDs(*in.TagIDs)
+		if err != nil {
+			return nil, err
+		}
+		tagIDs = normalized
+		tagIDsChanged = true
+		changed = append(changed, "tagIds")
+	}
+
 	statusChanged := false
 	if in.Status != nil {
 		status := strings.TrimSpace(*in.Status)
@@ -380,6 +478,20 @@ func (s PostService) Update(id int64, in PostUpdateInput, actor PostActor) (*mod
 		}
 		if err := model.UpdatePostFields(tx, post.ID, fields); err != nil {
 			return err
+		}
+		// 系列与标签的关联都放在同一个事务里，避免出现"字段写了、关联没写"的半截状态。
+		if in.SeriesID != nil {
+			if err := ensureSeriesExists(tx, post.SeriesID); err != nil {
+				return err
+			}
+		}
+		if tagIDsChanged {
+			if err := ensureTagsExist(tx, tagIDs); err != nil {
+				return err
+			}
+			if err := model.ReplacePostTags(tx, post.ID, tagIDs); err != nil {
+				return err
+			}
 		}
 		return ServiceGroupApp.Audit.WriteTx(tx, AuditInput{
 			AdminID:    actor.AdminID,
@@ -530,10 +642,13 @@ type PostPreview struct {
 }
 
 // Preview 渲染尚未保存的 Markdown，不写库。
+//
+// 渲染结果必须与发布后读取时一致（§16 G2「编辑器预览 = 发布结果」）：公开详情走的是
+// DecorateContent，所以这里也要过一遍，否则预览里看不到 srcset/原图链接/尺寸。
 func (s PostService) Preview(contentMD, excerpt string) PostPreview {
 	rendered := render.Markdown(contentMD)
 	return PostPreview{
-		HTML:        rendered.HTML,
+		HTML:        ServiceGroupApp.Media.DecorateContent(rendered.HTML),
 		Text:        rendered.Text,
 		WordCount:   rendered.WordCount,
 		ReadingTime: rendered.ReadingTime,
@@ -706,6 +821,79 @@ func clearableID(id int64) *int64 {
 		return nil
 	}
 	return &id
+}
+
+// normalizeTagIDs 归一化标签 id：丢掉非正数、去重，并保留调用方给的顺序。
+//
+// 超过 postTagMaxCount 直接拒绝而不是截断：悄悄丢标签比报错更难查（§5）。
+func normalizeTagIDs(ids []int64) ([]int64, error) {
+	normalized := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, id)
+	}
+	if len(normalized) > postTagMaxCount {
+		return nil, errs.WithDetails(errs.ErrorValidation, "参数校验失败", []request.FieldError{{
+			Field:   "tagIds",
+			Message: fmt.Sprintf("一篇文章最多 %d 个标签", postTagMaxCount),
+		}})
+	}
+	return normalized, nil
+}
+
+// ensureTagsExist 确认每个标签 id 都真实存在；否则返回 1003（data 带 tagIds）。
+//
+// post_tags 没有外键约束，不校验就会留下永远 join 不出来的孤儿关联。
+func ensureTagsExist(db *gorm.DB, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	existing, err := model.FindExistingTagIDs(db, ids)
+	if err != nil {
+		return fmt.Errorf("查询标签失败: %w", err)
+	}
+	if len(existing) == len(ids) {
+		return nil
+	}
+
+	known := make(map[int64]struct{}, len(existing))
+	for _, id := range existing {
+		known[id] = struct{}{}
+	}
+	missing := make([]string, 0, len(ids)-len(existing))
+	for _, id := range ids {
+		if _, ok := known[id]; !ok {
+			missing = append(missing, strconv.FormatInt(id, 10))
+		}
+	}
+	return errs.WithDetails(errs.ErrorValidation, "参数校验失败", []request.FieldError{{
+		Field:   "tagIds",
+		Message: "标签不存在：" + strings.Join(missing, "、"),
+	}})
+}
+
+// ensureSeriesExists 校验 seriesId 指向的系列存在；nil（不设系列）直接放行。
+func ensureSeriesExists(db *gorm.DB, seriesID *int64) error {
+	if seriesID == nil {
+		return nil
+	}
+	if _, err := model.FindSeriesByID(db, *seriesID); err != nil {
+		if errors.Is(err, model.ErrNotFound) {
+			return errs.WithDetails(errs.ErrorValidation, "参数校验失败", []request.FieldError{{
+				Field:   "seriesId",
+				Message: "系列不存在",
+			}})
+		}
+		return fmt.Errorf("查询系列失败: %w", err)
+	}
+	return nil
 }
 
 // validateCanonicalURL 校验 canonicalUrl：留空表示用默认（本站链接），填了必须是 http(s)。

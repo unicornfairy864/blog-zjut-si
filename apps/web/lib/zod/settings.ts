@@ -61,7 +61,7 @@ export const settingsSchema = z.object({
   imgBaseUrl: z
     .string()
     .trim()
-    .max(500, "图片前缀不能超过 500 个字符")
+    .max(200, "图片前缀不能超过 200 个字符")
     .refine(
       (value) =>
         value === "" ||

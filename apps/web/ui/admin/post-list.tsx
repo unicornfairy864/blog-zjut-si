@@ -16,6 +16,7 @@ import { Loading } from "@/ui/shared/loading";
 const FILTERS = [
   { value: "", label: "全部" },
   { value: "draft", label: "草稿" },
+  { value: "scheduled", label: "定时" },
   { value: "published", label: "已发布" },
   { value: "archived", label: "已归档" },
 ] as const;
@@ -106,6 +107,9 @@ export function PostList() {
                     状态
                   </th>
                   <th scope="col" className="px-4 py-3 font-medium">
+                    分类
+                  </th>
+                  <th scope="col" className="px-4 py-3 font-medium">
                     字数
                   </th>
                   <th scope="col" className="px-4 py-3 font-medium">
@@ -132,6 +136,28 @@ export function PostList() {
                     </td>
                     <td className="px-4 py-3">
                       <PostStatusBadge status={post.status} />
+                    </td>
+                    <td className="px-4 py-3">
+                      {/* 系列与标签是"文章归类"的唯一可见处：空着说明还没挂（D20 起编辑器可挂）。 */}
+                      {post.seriesName || post.tags.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {post.seriesName ? (
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                              {post.seriesName}
+                            </span>
+                          ) : null}
+                          {post.tags.map((tag) => (
+                            <span
+                              key={tag.slug}
+                              className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground"
+                            >
+                              {tag.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {post.wordCount}

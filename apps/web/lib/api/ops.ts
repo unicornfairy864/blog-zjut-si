@@ -1,3 +1,5 @@
+import { SITE } from "@/lib/constants/site";
+
 import { apiFetch } from "./fetcher";
 
 /** 附件（agent.md §4 post_attachments）；公开访问走 /api/attachments/{id}/go 302 跳转并计点击。 */
@@ -128,13 +130,23 @@ export interface AuditLogQuery {
 }
 
 /**
- * 附件的公开地址（相对路径，管理端与公开端同源）。
+ * 附件的公开下载地址（站内相对路径）。
  *
  * 本地附件由本站直接下发文件，外链附件 302 跳到 shareUrl；两种都计一次点击。
  * 组件里禁止拼 API 路径（agent.md §8），所以地址形态收在这里，界面只负责展示与复制。
  */
 export function attachmentGoPath(id: number): string {
   return `/api/attachments/${id}/go`;
+}
+
+/**
+ * 附件的**绝对**下载地址（给管理端展示/复制用）。
+ *
+ * 这个路由只注册在公开边缘（8640），管理端（8641）上打开相对路径只会拿到
+ * `{"code":1002}`；所以管理端里要给出公网站点的绝对地址（agent.md §2）。
+ */
+export function attachmentGoURL(id: number): string {
+  return `${SITE.url}${attachmentGoPath(id)}`;
 }
 
 /** 管理端附件接口（D14）。 */

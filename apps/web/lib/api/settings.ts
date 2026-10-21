@@ -96,12 +96,12 @@ export interface AdminSettings {
 /**
  * PUT /api/admin/settings 的入参。
  *
- * 写 `imgBaseUrl` / `siteTimezone` 会让服务端 `content_version+1`（公开读的 ETag 随之失效）；
- * 只改 `notify` 不会动 `content_version`——告警配置与内容无关。
+ * 内容类字段可以**不传**：只改告警时不要带上 `imgBaseUrl` / `siteTimezone`，
+ * 否则服务端会认为内容有变化并 `content_version+1`（全站 ETag 白失效一次）。
  */
 export interface AdminSettingsInput {
-  imgBaseUrl: string;
-  siteTimezone: string;
+  imgBaseUrl?: string;
+  siteTimezone?: string;
   notify: AdminNotifyInput;
 }
 
