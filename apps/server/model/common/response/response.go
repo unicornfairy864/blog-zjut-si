@@ -106,25 +106,14 @@ func matchETag(header, etag string) bool {
 
 // FailWithDetailed 返回失败响应。
 //
-// 业务错误一律 HTTP 200：前端只看信封里的 code，不解析 HTTP 状态。
+// 业务错误一律 HTTP 200：只要连接建立了（请求到了 Go 进程），状态就只由信封里的
+// code 表达，前端不解析 HTTP 状态。路由不存在（NoRoute）也走这里 → 200 + code 1002。
 // 失败仍然 Abort，后续 handler 不再执行。
 func FailWithDetailed(c *gin.Context, code int, data any, msg string) {
 	if msg == "" {
 		msg = "请求失败"
 	}
 	c.AbortWithStatusJSON(http.StatusOK, Body{Code: code, Data: data, Msg: msg})
-}
-
-// FailWithHTTPStatus 返回带真实 HTTP 状态码的失败响应。
-//
-// 只给「路由不存在」（NoRoute 404 + code 1002）这类必须保留真实状态码的场景用：
-// 契约规定 /api/* 的业务错误恒为 200，但路由本身不存在不是业务错误，
-// 验收断言（curl /api/admin/posts 必须 404）依赖真实 404。业务代码请用 FailWithDetailed。
-func FailWithHTTPStatus(c *gin.Context, status, code int, data any, msg string) {
-	if msg == "" {
-		msg = "请求失败"
-	}
-	c.AbortWithStatusJSON(status, Body{Code: code, Data: data, Msg: msg})
 }
 
 // FailWithError 归一化错误并输出；非 AppError 一律 code 1006（HTTP 200）。

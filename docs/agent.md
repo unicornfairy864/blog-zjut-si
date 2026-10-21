@@ -39,8 +39,8 @@
 ```
 公网 :80 ──▶ 宿主 nginx ──▶ 127.0.0.1:8640 ──▶ Go 公开边缘
                                                  ├ /api/*        → Go 本地
-                                                 ├ /admin/*      → 404
-                                                 ├ /uploads/*    → 404（nginx 直出）
+                                                 ├ /admin/*      → code 1002（HTTP 200，不泄露存在性）
+                                                 ├ /uploads/*    → code 1002（HTTP 200；公网由 nginx 直出）
                                                  └ 其余          → Next :3000
 
 本地 :8641 ─▶ ssh -L 8641:127.0.0.1:8641 ─▶ Go 管理边缘
@@ -50,10 +50,11 @@
                                               ├ /admin*        → Next :3000（含 /admin/login）
                                               ├ /preview*      → Next :3000（隧道里也能直接开预览链接）
                                               ├ /_next/*       → Next :3000（+ /favicon.ico）
-                                              └ 其余           → 404
+                                              └ 其余           → code 1002（HTTP 200）
 ```
 
-管理端 8641 额外直出 `/uploads/*`（仅本地媒体库与编辑器预览用）；8640 上 `/uploads` 仍为 404，由宿主 nginx 直出。
+管理端 8641 额外直出 `/uploads/*`（仅本地媒体库与编辑器预览用）；8640 上 `/uploads` 不落 Go（直接命中 nginx 直出）。
+**连接建立了就一定是 HTTP 200**：路由不存在、未登录、CSRF 失败、限流、锁定、Next 挂掉（`code 1006`）都是 200 + `code`。
 
 | 组件 | 职责 | 明确不做 |
 | --- | --- | --- |
@@ -206,15 +207,17 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 访客标识 | 公开写接口（点赞、PV 打点）读请求头 `X-Visitor-Id`：前端在 `localStorage` 生成一次的随机串，8–64 位 `[A-Za-z0-9_-]`；缺失或非法时服务端按 `ip\|ua` 兜底。**公开 HTML 与公开读接口一律不 `Set-Cookie`**（§17.1） |
 | 访客态读 | `liked` 这类依赖访客的读接口（`GET /posts/{slug}/stats`）用 `Cache-Control: no-store`，不参与 ETag；计数不进 SSR HTML（§17.1） |
 
-**保留真实 HTTP 状态码的例外清单**（这些都不是业务错误，不受"业务错误恒为 200"约束）：
+**保留真实 HTTP 状态码的例外清单**（只有这些不是 200；判定标准是"连接建立后 HTTP 状态本身承载协议语义"，而不是应用状态）：
 
 | # | 场景 | 真实状态码 |
 | --- | --- | --- |
-| 1 | `GET /healthz`、`GET /readyz`（容器健康检查依赖） | 200 / 503 |
-| 2 | 静态直出与文件下载：8641 的 `/uploads/*`（`edge.ServeUploads`）、公开 `GET /api/attachments/{id}/go` 命中本地文件时的文件流（`http.ServeFile`，含 200/206） | 200 / 206 / 404 |
-| 3 | 跳转：公开边缘按 `redirects.from_path` 的 301/302、外链附件的 `c.Redirect(302)` | 301 / 302 |
-| 4 | 公开读接口的 ETag 协商命中 `If-None-Match`（`response.OkWithETag`） | 304 |
-| 5 | **路由不存在**（三个 engine 的 `NoRoute`）：`404 + code 1002`，G1 验收断言依赖它（`curl 127.0.0.1:8640/api/admin/posts` 必须 404） | 404 |
+| 1 | `GET /healthz`、`GET /readyz`（容器健康检查依赖 `curl -f`，503 才能让容器被标记 unhealthy） | 200 / 503 |
+| 2 | 静态文件直出：8641 的 `/uploads/*`（`edge.ServeUploads`，缺文件 404；它没有 `code` 信封） | 200 / 404 |
+| 3 | 文件流：公开 `GET /api/attachments/{id}/go` 命中本地文件时用 `http.ServeFile`（Range 需要 206） | 200 / 206 |
+| 4 | 跳转：公开边缘按 `redirects.from_path` 的 301/302、外链附件的 `c.Redirect(302)` | 301 / 302 |
+| 5 | 公开读接口的 ETag 协商命中 `If-None-Match`（`response.OkWithETag`） | 304 |
+
+其余一切（含**路由不存在**、未登录、CSRF 失败、限流、锁定、Next 转发失败）都是 **HTTP 200 + `code`**：路由不存在是 `code 1002`，Next 转发失败是 `code 1006`。
 
 **错误码（数字码 + 常量名，禁止裸数字）**
 
@@ -240,8 +243,8 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 2008 | `ERROR_FILE_TOO_LARGE` | 附件字节数超过 `file.max_bytes` |
 
 > v1.14 起上表所有 code 的失败响应都是 **HTTP 200**，不再有"code → HTTP 状态"的映射。
-> `errs.HTTPStatus` 与 `AppError.HTTPStatus` 仍然保留，只服务于健康检查、文档与
-> `NoRoute` 这类需要真实状态码的非业务场景，**不得**再用来决定业务失败的状态码。
+> `errs.HTTPStatus` 与 `AppError.HTTPStatus` 仍然保留，只服务于 §5 例外清单里的场景
+> （健康检查等），**不得**再用来决定业务失败的状态码。
 
 **公开组（8640）**
 
@@ -371,7 +374,7 @@ pending ─lock─▶ running ─ok─▶ done
 | 连接池 | `MaxOpenConns=4` `MaxIdleConns=4`；写事务用 immediate |
 | 内存 | `GOMEMLIMIT=400MiB`，`GOGC=60`，禁止无界 goroutine 与无上限 buffer |
 | 路由 | gin；`TrustedProxies=["127.0.0.1","172.16.0.0/12"]`（容器看到的来源是 docker 网关，不是回环） |
-| 响应 | 只用 `model/common/response`：`OkWithData` / `FailWithDetailed`；业务失败一律 HTTP 200，状态语义由 `code` 表达（见 §5）；`NoRoute` 用 `FailWithHTTPStatus` 保留真实 404 |
+| 响应 | 只用 `model/common/response`：`OkWithData` / `FailWithDetailed`；连接建立后一律 HTTP 200，状态语义全部由 `code` 表达（含路由不存在 `1002` 与转发 Next 失败 `1006`，见 §5 例外清单） |
 | 中间件顺序 | request_id → panic 恢复 → 访问日志 → 限流 → 鉴权 → CSRF → handler |
 | 日志 | `slog` JSON 到 stdout，字段 `ts,level,request_id,method,path,status,dur_ms,ip_hash`；禁止打印密码、邮箱、cookie |
 | 错误处理 | 业务错误用 `errs.AppError{Code,HTTPStatus,Message}`；失败响应一律 HTTP 200，前端只看 `code`（`HTTPStatus` 已不决定状态码）；禁止把 `err.Error()` 直接返回前端 |
@@ -465,8 +468,8 @@ apps/web/
 | 上传 | 魔数校验 + 扩展名白名单（jpeg/png/webp/gif）+ 像素上限 + 大小上限 30MB；HEIC/AVIF 明确拒绝并提示前端转码；文件名不落地 |
 | EXIF | 入库前按 Orientation 摆正并剥离全部 EXIF（含 GPS），再生成变体 |
 | SQL | 全参数化；FTS5 查询字符串必须转义 |
-| 越权 | 8640 层直接 404 掉 `/admin`、`/api/admin`，不依赖登录态判断（`NoRoute` 例外，仍是真实 404 + `code 1002`） |
-| 限流 | 登录 5/min（按用户名）；评论 3/10min/IP；公开 API 20 r/s；点赞 10/min/visitor |
+| 越权 | 8640 层直接挡掉 `/admin`、`/api/admin`，不依赖登录态判断（`NoRoute` 回 `200 + code 1002`，不泄露路径是否存在） |
+| 限流与锁定 | 登录 5/min（按用户名）；评论 3/10min/IP；公开 API 20 r/s；点赞 10/min/visitor。**登录时先判锁定再判限流**：账号已锁定回 `code 2005`，不能回 `code 1005`（否则用户只会看到"稍后再试"却永远进不去） |
 | 响应头 | `X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy` 最小化 |
 | CSP | `script-src 'self' 'nonce-{n}' 'strict-dynamic'`，nonce 由 `middleware.ts` 注入。**禁止 `unsafe-inline`**，否则 Next RSC 水合会失败；`style-src 'self' 'unsafe-inline'` 可保留（Tailwind 运行时无内联样式，但 shadcn 组件有） |
 | 敏感信息 | `.env` 不入库不入镜；`admin_email` 不在任何公开接口出现 |
@@ -629,7 +632,7 @@ apps/web/
 
 | 门禁 | 对应天 | 必过断言 |
 | --- | --- | --- |
-| G1 骨架与鉴权 | D1–D3 | 空库全量迁移成功（23 表 + FTS 触发器）；`curl 127.0.0.1:8640/api/admin/posts` = 404（NoRoute 例外）；`curl 127.0.0.1:8640/healthz` = 404；`curl 公网IP:8641` 连接拒绝；5 次错误锁定 30min；会话 7 天过期；登出即失效；未登录 = 200 + `code 1000`；无 CSRF = 200 + `code 1001`；响应体为 `{code,data,msg}` |
+| G1 骨架与鉴权 | D1–D3 | 空库全量迁移成功（23 表 + FTS 触发器）；`curl 127.0.0.1:8640/api/admin/posts` = 200 + `code 1002`（连接成功即 200，路径不存在由 code 表达）；`curl 127.0.0.1:8640/healthz` = 200 + `code 1002`；`curl 公网IP:8641` 连接拒绝；5 次错误口令后第 6 次 = 200 + `code 2005`（锁定优先于限流）；会话 7 天过期；登出即失效；未登录 = 200 + `code 1000`；无 CSRF = 200 + `code 1001`；响应体为 `{code,data,msg}` |
 | G2 文章与渲染 | D4–D6 | 草稿不可见；slug 冲突 = 200 + `code 2001`；`<script>` 被剥离；自动保存不产生多余 revision；发布后立即可见；编辑器预览 = 发布结果；2 字中文词可搜到；归档 = 200 + `code 1007`（页面 410） |
 | G3 媒体与附件 | D7–D8 / v1.13 | 31MB 拒绝 = 200 + `code 2003`；50MP 拒绝 = 200 + `code 2003`；同图去重；引用删除 = 200 + `code 2002` + 清单；四档变体可访问；转码峰值 <300MB；GPS EXIF 不出现在输出图；HEIC 被拒并有提示；原图永久保留；附件上传落 `file.dir`、`.php`/`.html`/`.exe` = 200 + `code 2007`、超限 = 200 + `code 2008`；`/go` 响应带 `Content-Disposition: attachment` + `octet-stream` + `nosniff`；`GET /storage` 的孤儿与缺失清单与磁盘一致 |
 | G4 公开端 | D9–D10 | 375px 无横向滚动；分页 + 标签组合正确；404 无堆栈；`srcset` 生效；系列/友链/关于页可访问 |
@@ -800,7 +803,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
-| 1.14 | 2026-10-20 | **业务错误统一 HTTP 200**：`response.FailWithDetailed` 固定 `200`，成功/失败只由信封 `code` 区分（gin-vue-admin 风格）；`data` 语义不变（无附加数据仍为 `null`，字段错误仍为 `[{field,message}]`），失败仍 `Abort`；新增 `response.FailWithHTTPStatus` 只给三个 engine 的 `NoRoute` 保留真实 404 + `code 1002`；`errs.HTTPStatus` / `AppError.HTTPStatus` 保留但注明不再决定状态码；前端 `fetcher.ts`、`lib/api/public.ts`（`isApiError` → `isApiCode`）、`middleware.ts`（按 `code 1007` 回 410 页面）、评论与点赞组件的错误分支全部改按 `code`；§5 补「保留真实 HTTP 状态码的例外清单」：健康检查 200/503、静态直出与文件流、301/302 跳转、ETag 304、`NoRoute` 404 |
+| 1.14 | 2026-10-20 | **连接建立后一律 HTTP 200，状态只存在 `code` 里**（gin-vue-admin 风格）：`response.FailWithDetailed` 固定 `200` 并保留 `Abort`；`data` 语义不变（无附加数据仍为 `null`，字段错误仍为 `[{field,message}]`）；`errs.HTTPStatus` / `AppError.HTTPStatus` 保留但不再决定状态码；前端 `fetcher.ts`、`lib/api/public.ts`（`isApiError` → `isApiCode`）、`middleware.ts`（按 `code 1007` 回 410 页面）、评论与点赞组件的错误分支全部改按 `code`；§5 明确**例外清单**（只有 HTTP 协议语义才保留真实状态码）：健康检查 `200/503`、静态文件直出 `200/404`、附件文件流 `200/206`、跳转 `301/302`、ETag `304`；**路由不存在**与 **Next 转发失败**也改成 `200` + `code 1002` / `code 1006`。登录改为**先判锁定再判限流**：连续 5 次错误口令后第 6 次直接 `code 2005`，不再被 `code 1005` 挡住。§2 拓扑与 §16 G1 断言同步（8640 上 `/api/admin/posts`、`/healthz` 改为 `200 + code 1002`） |
 | 1.13 | 2026-10-20 | **图床下线，图片与附件全部本地自托管**：删除 Cloudreve/WebDAV 集成（`cloudreve.*` 配置、`gowebdav` 依赖、`media_archive` 任务、`media.archive` 审计、设置页图床块），C10 扩为"图片与附件都不入库、不上 CDN/对象存储"；原图**永久保留**（取消 30 天清理），「查看原图」改指同源 `/uploads/{key}/original.{ext}`；新增附件本地上传 `POST /attachments/upload`（multipart，落 `file.dir/{sha[:2]}/{sha256}{ext}`，按 sha256 去重）与附件安全黑名单（`415/2007`、`413/2008`），公开 `/attachments/{id}/go` 对本地附件直接下发（`octet-stream` + `Content-Disposition` + `nosniff` + Range）、对外链附件仍 302；新增 `GET /storage` 与 `POST /storage/cleanup`（占用统计、孤儿与缺失对账、孤儿清理）与 `DELETE /media/{id}/original`（删原图保变体）；`post_attachments` 增 `storage_key`/`mime`（migration 000003），`backup` 同时快照 `files/`，`cleanup` 不再动原图与附件 |
 | 1.12 | 2026-10-19 | D14 内容管理与运维闭环（M8）：`tags`/`series`/`links`/`redirects`/`attachments` 管理端 CRUD（`GET|POST /x`、`PUT|DELETE /x/{id}`，分类列表带未删除文章数、删分类不删文章）；公开 `GET /attachments/{id}/go`（302 + `clicks+1`）与公开边缘按 `redirects.from_path` 精确 301/302（`hits+1`）；`GET|PUT /settings` 只允许改 `imgBaseUrl` / `siteTimezone` 并强制 `content_version+1`，图床口令永不返回；管理端 `GET /jobs` 与 `GET /audit-logs` 分页；web 新增标签/系列/友链/跳转/附件/任务/审计/设置页 |
 | 1.11 | 2026-10-19 | D13 发布控制（M7）：新增 `POST /posts/{id}/schedule`（未来时间 → `scheduled` + 投递 `publish_scheduled` 任务，`unpublish`/回草稿撤任务）与 `POST /jobs`（手动投递 `cleanup`/`backup`/`link_check`）；`POST /posts/{id}/revisions/{rid}/restore` 回滚时**新写一条 revision**；预览链接改为一次性（首次访问写 `used_at`，之后或过期 = 410/2006），公开 `GET /preview/{token}` 为 `no-store`；§13 明确周期任务（backup 03:00 / cleanup 04:00 / link_check 周一 05:00，按站点时区，判据是当天是否已有同类型任务） |

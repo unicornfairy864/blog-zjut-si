@@ -33,8 +33,10 @@ func NewProxy(upstream string, logger *slog.Logger) (*Proxy, error) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("转发到 Next 失败", "path", r.URL.Path, "err", err)
+			// 连接已经建立（请求到了 Go），所以按契约回 HTTP 200 + code 1006：
+			// 状态只存在信封里，基础设施故障也走同一个口径（agent.md §5）。
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusBadGateway)
+			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"code":1006,"data":null,"msg":"页面服务暂不可用"}`))
 		},
 	}

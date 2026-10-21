@@ -79,12 +79,11 @@ func (s AuthService) Login(in LoginInput) (*LoginResult, error) {
 	if username == "" || in.Password == "" {
 		return nil, errs.New(errs.ErrorValidation, "用户名和密码不能为空")
 	}
-	if !loginRateLimiter().Allow(username) {
-		return nil, errs.New(errs.ErrorRateLimited, "登录尝试过于频繁，请稍后再试")
-	}
 
 	now := dbtime.Now()
 
+	// 先判锁定、再判限流：账号已锁定时必须回 2005（锁定），不能回 1005（限流），
+	// 否则用户看到的是"稍后再试"，怎么等也进不去（§9）。
 	attempt, err := model.FindLoginAttempt(global.DB, username, model.AttemptKindLogin)
 	if err != nil && !errors.Is(err, model.ErrNotFound) {
 		return nil, fmt.Errorf("读取登录计数失败: %w", err)
@@ -93,6 +92,10 @@ func (s AuthService) Login(in LoginInput) (*LoginResult, error) {
 		return nil, errs.WithDetails(errs.ErrorLoginLocked,
 			fmt.Sprintf("登录失败次数过多，账号已锁定 %d 分钟", global.Config.Auth.LockMinutes),
 			map[string]any{"lockedUntil": attempt.LockedUntil})
+	}
+
+	if !loginRateLimiter().Allow(username) {
+		return nil, errs.New(errs.ErrorRateLimited, "登录尝试过于频繁，请稍后再试")
 	}
 
 	admin, adminErr := model.FindAdminByUsername(global.DB, username)
