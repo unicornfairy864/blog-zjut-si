@@ -70,6 +70,9 @@ const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<
 - schema 放 `lib/zod/`，约束与服务端 `binding` 一致。
 - 用 `react-hook-form` 的非受控写法（`register`），不要每个字段一个 `useState`。
 - 错误提示与字段用 `aria-describedby` / `aria-invalid` 关联。
+- **密钥字段**（服务端不回显的 token / 地址）在表单里留空表示"保持不变"，要清空得单独一个
+  `clearXxx` 复选框；提交时由 `secretValue(input, clear)` 归一成 `null`（不变）/ `""`（清空）/ 新值。
+  设置页的告警卡片就是这么做的（`ui/admin/settings-form.tsx`）。
 
 ## 6. 可访问性
 

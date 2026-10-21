@@ -55,3 +55,9 @@ file:
 task:
   enabled: true
   interval_seconds: 60
+
+# 证书到期检查（可选）：宿主 certbot 管的 fullchain.pem，容器只读一眼 NotAfter。
+# 需要同时把宿主 /etc/letsencrypt 只读挂进容器（deploy/compose.yaml）。
+# 留空 = 不检查；到期阈值（默认 14 天）在管理端「设置 → 告警通知」里改。
+tls:
+  cert_file: ""

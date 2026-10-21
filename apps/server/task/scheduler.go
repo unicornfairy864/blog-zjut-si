@@ -15,6 +15,28 @@ import (
 // Handler 执行一种任务；返回错误会触发退避重试。
 type Handler func(ctx context.Context, job *model.Job) error
 
+// JobFailedHook 在任务进入 failed（不再重试）时被调用，用于发告警（agent.md §13）。
+//
+// 由 initialize 注入 service 的实现：task 不能直接引 service（service 已经引了 task，
+// 反向依赖会成环），所以这里只留一个函数位。
+type JobFailedHook func(job *model.Job, cause string)
+
+// jobFailedHook 是当前注册的失败回调；只在启动时赋值一次，之后只读。
+var jobFailedHook JobFailedHook
+
+// SetJobFailedHook 注册任务失败回调；传 nil 表示不通知。
+func SetJobFailedHook(hook JobFailedHook) {
+	jobFailedHook = hook
+}
+
+// notifyJobFailed 尽力通知一次；通知失败绝不影响任务本身的处理结果。
+func notifyJobFailed(job *model.Job, cause string) {
+	if jobFailedHook == nil {
+		return
+	}
+	jobFailedHook(job, cause)
+}
+
 // wake 用于业务侧投递任务后立即唤醒调度器，避免等满一个 tick。
 var wake = make(chan struct{}, 1)
 
@@ -114,6 +136,7 @@ func (s *Scheduler) run(ctx context.Context, job *model.Job) {
 	if !ok {
 		_ = model.FailJob(global.DB, job.ID, "未知任务类型")
 		global.Log.Error("未知任务类型", "type", job.Type, "id", job.ID)
+		notifyJobFailed(job, "未知任务类型")
 		return
 	}
 
@@ -122,6 +145,7 @@ func (s *Scheduler) run(ctx context.Context, job *model.Job) {
 			_ = model.FailJob(global.DB, job.ID, truncateError(err.Error()))
 			global.Log.Error("任务失败", "type", job.Type, "id", job.ID,
 				"attempts", job.Attempts, "err", err)
+			notifyJobFailed(job, truncateError(err.Error()))
 			return
 		}
 		delay := backoff(job.Attempts)

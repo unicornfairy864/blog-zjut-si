@@ -27,6 +27,7 @@ type Config struct {
 	File   FileConfig   `mapstructure:"file"`
 	Task   TaskConfig   `mapstructure:"task"`
 	Backup BackupConfig `mapstructure:"backup"`
+	TLS    TLSConfig    `mapstructure:"tls"`
 }
 
 // ServerConfig 描述两条 listener 的监听与超时参数。
@@ -93,6 +94,14 @@ type TaskConfig struct {
 // BackupConfig 描述备份落点（agent.md §14：库保留 30 天、图片与附件 90 天）。
 type BackupConfig struct {
 	Dir string `mapstructure:"dir"`
+}
+
+// TLSConfig 描述宿主证书文件的位置（agent.md §14：证书到期要告警）。
+//
+// 证书由宿主 certbot 管理，容器只**只读**看一眼 fullchain.pem 的 NotAfter，
+// 自己不做签发与续期。留空表示不检查（本地开发与非 TLS 部署都走这条）。
+type TLSConfig struct {
+	CertFile string `mapstructure:"cert_file"`
 }
 
 // ReadHeaderTimeout 返回读请求头的超时。
@@ -198,6 +207,8 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("task.interval_seconds", 60)
 
 	v.SetDefault("backup.dir", "./data/backup")
+
+	v.SetDefault("tls.cert_file", "")
 }
 
 // normalize 做无损归一化：去空白、创建目录。
@@ -211,6 +222,7 @@ func (c *Config) normalize() error {
 	c.Upload.Dir = strings.TrimSpace(c.Upload.Dir)
 	c.File.Dir = strings.TrimSpace(c.File.Dir)
 	c.Backup.Dir = strings.TrimSpace(c.Backup.Dir)
+	c.TLS.CertFile = strings.TrimSpace(c.TLS.CertFile)
 
 	if c.Upload.Dir != "" {
 		if err := os.MkdirAll(c.Upload.Dir, 0o750); err != nil {

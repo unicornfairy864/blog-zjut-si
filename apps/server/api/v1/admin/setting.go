@@ -9,13 +9,14 @@ import (
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/service"
 )
 
-// SettingApi 处理 /api/admin/settings：只允许改 imgBaseUrl / siteTimezone（§5）。
+// SettingApi 处理 /api/admin/settings：可写 imgBaseUrl / siteTimezone / notify（§5）。
 type SettingApi struct{}
 
 // settingUpdateRequest 是设置更新入参；nil 字段表示不修改。
 type settingUpdateRequest struct {
-	ImgBaseURL   *string `json:"imgBaseUrl"`
-	SiteTimezone *string `json:"siteTimezone"`
+	ImgBaseURL   *string               `json:"imgBaseUrl"`
+	SiteTimezone *string               `json:"siteTimezone"`
+	Notify       *service.NotifyUpdate `json:"notify"`
 }
 
 // Detail 处理 GET /api/admin/settings：可写项 + 只读回显（不含任何口令）。
@@ -37,7 +38,11 @@ func (SettingApi) Update(c *gin.Context) {
 	}
 
 	view, err := service.ServiceGroupApp.Content.UpdateSettings(
-		service.SettingsUpdate{ImgBaseURL: req.ImgBaseURL, SiteTimezone: req.SiteTimezone},
+		service.SettingsUpdate{
+			ImgBaseURL:   req.ImgBaseURL,
+			SiteTimezone: req.SiteTimezone,
+			Notify:       req.Notify,
+		},
 		actorFrom(c),
 	)
 	if err != nil {

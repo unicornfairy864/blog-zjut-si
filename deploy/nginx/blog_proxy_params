@@ -15,4 +15,7 @@ proxy_send_timeout 60s;
 
 # HTML 与公开 API：每次回源校验，靠 ETag 省流量（§12）。
 proxy_cache off;
-add_header X-Content-Type-Options "nosniff" always;
+
+# 不在这里加 add_header X-Content-Type-Options：Go 的 SecurityHeaders 中间件对
+# 两条 listener 的每个响应都已设 nosniff / Referrer-Policy / Permissions-Policy，
+# 再设一遍会输出两个同名响应头。nginx 自己直出的 /uploads/ 才需要（见 blog.conf）。

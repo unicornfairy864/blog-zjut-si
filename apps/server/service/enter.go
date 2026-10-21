@@ -11,6 +11,7 @@ type ServiceGroup struct {
 	Content ContentService
 	Health  HealthService
 	Media   MediaService
+	Notify  NotifyService
 	Ops     OpsService
 	Post    PostService
 	Public  PublicService

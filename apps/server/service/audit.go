@@ -51,6 +51,7 @@ const (
 	AuditActionAttachmentUpload = "attachment.upload"
 
 	AuditActionSettingsUpdate = "settings.update"
+	AuditActionNotifyTest     = "notify.test"
 	AuditActionJobEnqueue     = "job.enqueue"
 	AuditActionJobRetry       = "job.retry"
 

@@ -90,6 +90,9 @@ func NewAdminEngine(proxy *edge.Proxy) *gin.Engine {
 			authorized.GET("/settings", v1.ApiGroupApp.Admin.Setting.Detail)
 			authorized.PUT("/settings", v1.ApiGroupApp.Admin.Setting.Update)
 
+			// 告警自检（D17）：按当前配置立刻投递一条测试告警。
+			authorized.POST("/notify/test", v1.ApiGroupApp.Admin.Notify.Test)
+
 			// 存储管理（§10）：磁盘占用对账、孤儿文件清理。
 			authorized.GET("/storage", v1.ApiGroupApp.Admin.Storage.Overview)
 			authorized.POST("/storage/cleanup", v1.ApiGroupApp.Admin.Storage.Cleanup)

@@ -13,15 +13,26 @@ services:
     container_name: zjut-blog
     restart: always
     mem_limit: 1.5g
+    # 与 server.shutdown_timeout_seconds（15s）对齐，给两条 listener 收尾留余量。
+    stop_grace_period: 20s
     ports:
       - "127.0.0.1:8640:8640"
       - "127.0.0.1:8641:8641"
+    # 与镜像里的 HEALTHCHECK 保持一致（这里显式写一遍，`docker inspect` 能直接看到口径）。
+    # 注意：healthcheck 失败只会把容器标成 unhealthy，docker 不会因此重启容器；
+    # 需要"不健康就重启"就在宿主加 autoheal（runbook §19 第 9 步，可选）。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8641/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     environment:
       BLOG_SERVER_PUBLIC: ":8640"
       BLOG_SERVER_ADMIN: ":8641"
       BLOG_WEB_UPSTREAM: "http://127.0.0.1:3000"
       BLOG_DB_PATH: "${BLOG_DB_PATH:-/data/blog/db/blog.db}"
-      # 三个数据目录都必须在 bind mount 里，且宿主目录要属于 uid 1000（runbook §11.1）。
+      # 四个数据目录都必须在 bind mount 里，且宿主目录要属于 uid 1000（runbook §11.1）。
       BLOG_UPLOAD_DIR: "${BLOG_UPLOAD_DIR:-/data/blog/uploads}"
       # 附件目录：只经 /api/attachments/{id}/go 下发，不做静态直出。
       BLOG_FILE_DIR: "${BLOG_FILE_DIR:-/data/blog/files}"
@@ -29,6 +40,9 @@ services:
       BLOG_BACKUP_DIR: "${BLOG_BACKUP_DIR:-/data/blog/backup}"
       BLOG_FILE_MAX_BYTES: "${BLOG_FILE_MAX_BYTES:-20971520}"
       BLOG_LOG_LEVEL: "${BLOG_LOG_LEVEL:-info}"
+      # 证书到期检查（可选）：填容器内可见的 fullchain.pem 路径；留空则跳过检查。
+      # 用了它就必须同时打开下面的 /etc/letsencrypt 只读挂载。
+      BLOG_TLS_CERT_FILE: "${BLOG_TLS_CERT_FILE:-}"
       # 首次启动且 admins 表为空时创建账号；建好后可从此处删除。
       BLOG_ADMIN_USERNAME: "${BLOG_ADMIN_USERNAME:-}"
       BLOG_ADMIN_PASSWORD: "${BLOG_ADMIN_PASSWORD:-}"
@@ -37,6 +51,10 @@ services:
       - /data/blog/uploads:/data/blog/uploads
       - /data/blog/files:/data/blog/files
       - /data/blog/backup:/data/blog/backup
+      # 证书只读挂载（可选，配合 BLOG_TLS_CERT_FILE）。注意 certbot 的 live/ 下是
+      # 指向 ../../archive/ 的符号链接，所以必须挂整个 /etc/letsencrypt，
+      # 只挂 live/blog.zjut.si 会让链接断掉、检查恒失败。
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
     logging:
       driver: json-file
       options:

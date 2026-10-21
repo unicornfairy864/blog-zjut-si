@@ -12,6 +12,10 @@ const (
 	SettingImgBaseURL     = "img_base_url"
 	SettingSiteTimezone   = "site_timezone"
 	SettingVisitorSalt    = "visitor_salt"
+	// SettingNotify 是告警通道配置（agent.md §13 / §14，JSON 对象）。
+	SettingNotify = "notify"
+	// SettingNotifyState 记录各告警事件最近一次投递结果，用于 24h 静默与失败重试（内部键，不出现在管理端回显里）。
+	SettingNotifyState = "notify_state"
 )
 
 // Setting 对应 settings 表：key 为主键，value_json 是合法 JSON 字符串。

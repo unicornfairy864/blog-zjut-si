@@ -171,7 +171,7 @@
 | `page_views` | id, post_id NULL, path, visitor_hash, referrer_host, created_at | INDEX(post_id,created_at)；明细保留 90 天 |
 | `stats_daily` | date TEXT, post_id INT, pv INT, uv INT | PK(date,post_id)；date 为上海日期；`post_id=0` 表示全站聚合行（PK 不允许 NULL） |
 | `jobs` | id, type, payload, run_at, status, attempts, max_attempts, last_error, locked_at, created_at | INDEX(status,run_at) |
-| `settings` | key TEXT PK, value_json, updated_at | 必含 `content_version`、`img_base_url`、`site_timezone`、`visitor_salt` |
+| `settings` | key TEXT PK, value_json, updated_at | 必含 `content_version`、`img_base_url`、`site_timezone`、`visitor_salt`；`notify`（告警配置）与 `notify_state`（告警去重状态）由 D17 起使用 |
 | `links` | id, name, url, avatar, description, sort, status, created_at | — |
 | `audit_logs` | id, admin_id, action, target_type, target_id, meta_json, ip_hash, created_at | INDEX(created_at), INDEX(target_type,target_id) |
 | `pages` | id, slug, title, content_md, content_html, content_text, seo_title, seo_description, created_at, updated_at, deleted_at | UNIQUE(slug)；承载 `/about` 等静态页 |
@@ -254,7 +254,7 @@ storage_driver  : local                             # 只有本地磁盘，不�
 
 **管理组（8641）**
 
-`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `DELETE /media/{id}/original` · `POST /media/{id}/retry` · `GET /storage` · `POST /storage/cleanup` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `POST /attachments/upload` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
+`POST /auth/login` · `POST /auth/logout` · `GET /auth/me` · `GET|POST /posts` · `GET|PUT|PATCH|DELETE /posts/{id}` · `POST /posts/{id}/publish` · `POST /posts/{id}/schedule` · `POST /posts/{id}/unpublish` · `GET /posts/{id}/revisions` · `POST /posts/{id}/revisions/{rid}/restore` · `POST /posts/{id}/preview-link` · `DELETE /preview-links/{token}` · `POST /posts/preview` · `GET|POST /media` · `DELETE /media/{id}` · `DELETE /media/{id}/original` · `POST /media/{id}/retry` · `GET /storage` · `POST /storage/cleanup` · `GET|PATCH /comments` · `POST /comments/bulk` · `GET|PUT /settings` · `POST /notify/test` · `GET|POST|PUT|DELETE /{tags|series|links|redirects|attachments}` · `POST /attachments/upload` · `GET /stats/overview` · `GET /stats/daily?from&to` · `GET /jobs` · `POST /jobs` · `POST /jobs/{id}/retry` · `GET /audit-logs`
 
 > **尚未实现**（接口清单里出现过、路由还没注册的，别当契约用）：管理端 `GET|PUT /pages/{slug}`（静态页写接口）与 `POST /api/internal/revalidate`。
 
@@ -286,8 +286,8 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 版本回滚 | `POST /posts/{id}/revisions/{rid}/restore`：用旧版本内容覆盖正文，并**再写一条新 revision**（`revision+1`，note 记来源），历史不被改写 |
 | 预览链接 | `POST /posts/{id}/preview-link` 生成一次性 token（明文只回一次，库里只存 `token_hash`，24h 过期）；`GET /preview/{token}`（`no-store`）首次访问写 `used_at` 并返回内容，之后或过期 → `code 2006`；不存在 → `code 1002` |
 | 预览内容 | 预览页能看草稿 / 定时 / 归档文章；`robots.txt` 禁 `/preview`，且预览不参与 sitemap 与 RSS |
-| 任务投递 | `GET /jobs` 列表、`POST /jobs/{id}/retry` 重试失败任务、`POST /jobs` 手动投递（只允许 `cleanup` / `backup` / `link_check`，用于运维与自测） |
-| 周期任务 | 调度器每 tick 检查一次"当天该跑还没跑"的周期任务（按站点时区）：`backup` 03:00、`cleanup` 04:00；`link_check` 每周一 05:00。判据是 `jobs` 里当天是否已有同类型记录，重启不会重复跑 |
+| 任务投递 | `GET /jobs` 列表、`POST /jobs/{id}/retry` 重试失败任务、`POST /jobs` 手动投递（只允许 `cleanup` / `backup` / `link_check` / `integrity_check`，用于运维与自测） |
+| 周期任务 | 调度器每 tick 检查一次"当天该跑还没跑"的周期任务（按站点时区）：`backup` 03:00、`cleanup` 04:00；`integrity_check` 每周一 04:30、`link_check` 每周一 05:00。判据是 `jobs` 里当天是否已有同类型记录，重启不会重复跑 |
 
 **内容管理口径（D14）**
 
@@ -301,9 +301,22 @@ storage_driver  : local                             # 只有本地磁盘，不�
 | 附件安全 | 用**黑名单**拦扩展名与固定文件名（服务端脚本、可执行文件、浏览器会当页面渲染的 `html/svg/xml` 等，见 §10），命中 → `code 2007`；超过 `file.max_bytes` → `code 2008`；隐藏文件（`.` 开头）一律拒绝 |
 | 附件下载 | 公开 `GET /attachments/{id}/go`：本地的直接下发（`application/octet-stream` + `Content-Disposition: attachment` + `nosniff`，支持 Range），外链的 `302` 到 `share_url`；两种情况都 `clicks+1`、`no-store`；记录不存在 → `code 1002`，文件丢了 → `code 1007` |
 | 存储管理 | `GET /storage`：占用统计（原图/变体/附件/合计）+ 孤儿文件（磁盘有、库里无）+ 缺失文件（库里有、磁盘无）+ 已删原图数，清单各截断到 200/100 条但计数是全量；`POST /storage/cleanup` 只删孤儿，返回 `{removedFiles,removedBytes,failedFiles}` |
-| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `code 1003`）；只读回显 `contentVersion`、`upload{dir,maxBytes}`、`file{dir,maxBytes}`、`task{enabled,intervalSeconds}`、`db{path}`（**不含任何口令**）。写成功必须 `content_version+1`（公开读的 ETag 依赖它） |
+| 设置 | `GET|PUT /settings`：可写 `imgBaseUrl`、`siteTimezone`（IANA 名，非法 → `code 1003`）与 `notify`（告警通道，见下）；只读回显 `contentVersion`、`upload{dir,maxBytes}`、`file{dir,maxBytes}`、`task{enabled,intervalSeconds}`、`db{path}`（**不含任何口令**）。写内容类设置必须 `content_version+1`（公开读的 ETag 依赖它）；**只改 `notify` 不动 `content_version`**（告警配置与内容无关） |
 | 任务页 | `GET /jobs` 分页 + `POST /jobs` 手动投递 + `POST /jobs/{id}/retry`；`payload` 原样回显 JSON 字符串 |
 | 审计页 | `GET /audit-logs` 分页，支持 `action` / `targetType` / `targetId` 过滤；`meta` 以对象回显（库里是 JSON 字符串） |
+
+**告警口径（D17）**
+
+| 项 | 规则 |
+| --- | --- |
+| 配置 | `settings.notify`：`{enabled, channel: webhook\|telegram, webhookUrl, telegramBotToken, telegramChatId, events{jobFailed,diskHigh,certExpiring}, diskThresholdPercent(1–99，默认 85), certExpireDays(1–3650，默认 14)}`；阈值与勾选都可改，越界 → `code 1003` + 字段错误数组 |
+| 密钥 | `webhookUrl` 与 `telegramBotToken` **永不回显**，只回 `webhookUrlSet` / `telegramBotTokenSet`；PUT 时 `null` = 保持不变、`""` = 清空、非空 = 覆盖。审计只记 `webhookUrlSet` 之类的布尔值（§9） |
+| 启用校验 | `enabled=true` 时对应渠道必填项不能为空（webhook 要地址，Telegram 要 token + chatId），否则 `code 1003` |
+| 事件 | `job_failed`（任务 failed）、`disk_high`（uploads 所在文件系统占用 ≥ 阈值）、`cert_expiring`（`tls.cert_file` 的 `NotAfter` 距今 < 阈值；未配置该文件则完全跳过） |
+| 去重 | 同一事件投递成功后 24h 内不再重复；失败则 15 分钟后重试（不让一次网络抖动吞掉告警）；条件恢复即清空该事件的状态 |
+| 报文 | webhook：`{"source":"blog","event":"job_failed","level":"error","message":"…","at":"RFC3339","details":{…}}`；Telegram：纯文本（`[zjut.si 博客] 告警\n…`），不用 Markdown |
+| 自检 | `POST /notify/test`：按**已保存**的配置立刻投递一条测试告警，不看 `enabled` 也不受静默期影响；通道没配齐 → `code 1003`，投递失败 → `code 1006`（原因写日志，`msg` 只给"超时/HTTP 4xx/连不上"这一级） |
+| 回显 | `GET /settings` 的 `notify` 另含只读 `certFile`（来自 `BLOG_TLS_CERT_FILE`）与 `lastAlerts[{event,at,ok}]`（各事件最近一次投递结果） |
 
 ---
 
@@ -590,9 +603,15 @@ apps/web/
 | `link_check` | 每周一 05:00 | HEAD 检查外链与正文图片，写 `link_checks` |
 | `backup` | 每日 03:00（Asia/Shanghai） | `VACUUM INTO` + `uploads` 与 `files` 两个目录的硬链接快照（`blog-YYYYMMDD.db` / `uploads-YYYYMMDD/` / `files-YYYYMMDD/`；库留 30 天、目录留 90 天） |
 | `cleanup` | 每日 04:00（Asia/Shanghai） | 物理删软删 >30 天的文章（含其附件文件）、删 `page_views` >90 天、裁剪 revision 到 50、删过期 session/preview_token/login_attempts。**不动原图与附件**（§10） |
+| `integrity_check` | 每周一 04:30（Asia/Shanghai） | 库上跑 `PRAGMA integrity_check`（必须是 `ok`），并确认最近一次 `blog-*.db` 快照存在且是完整 SQLite 文件（校验文件头）；不通过即任务失败 → 触发告警 |
 
 调度器：单 goroutine ticker，每 60s 扫描；取任务前 `UPDATE ... SET status='running', locked_at=? WHERE id=? AND status='pending'` 保证互斥。
-**任一任务进入 `failed` 或磁盘 >85%，必须触发一次通知**（邮件 / Telegram / webhook 任选其一，配置存 `settings`）。
+
+**告警（v1.16 起）**：任一任务进入 `failed`、磁盘占用 ≥ 阈值（默认 85%）、TLS 证书剩余天数 < 阈值（默认 14 天）→ 按 `settings.notify` 发一条通知。
+渠道二选一：webhook（`POST` JSON `{source,event,level,message,at,details}`）或 Telegram（Bot API `sendMessage`）。
+同一事件在**投递成功后 24h 内不重复**，失败则 15 分钟后重试；条件恢复（磁盘降回、证书换新）即清空静默状态。
+投递状态存 `settings.notify_state`，`POST /notify/test` 可随时自检通道；磁盘与证书由一个**独立的巡检 goroutine 每 60s** 看一眼（与调度器同生命周期、由 `errgroup` 托管，不新增进程与表）。
+**应用自身挂掉时它发不出告警**，宿主侧另配外部探活（runbook §20.4）。
 
 ---
 
@@ -601,12 +620,13 @@ apps/web/
 | 项 | 规定 |
 | --- | --- |
 | 基础镜像 | Ubuntu 24.04 宿主；容器内 debian-slim + 静态二进制 + Node 运行时 |
-| 进程托管 | s6-overlay：`go` 与 `next` 两个 service，任一退出 → 容器重启 |
-| 健康检查 | `HEALTHCHECK` 打 `127.0.0.1:8641/readyz`，间隔 30s，3 次失败重启 |
+| 进程托管 | s6-overlay：`blogd`（Go）与 `web`（Next）两个 longrun。**任一进程退出由 s6-supervise 原地拉起**（容器不重启）；整个容器退出（含 `docker kill`）由 `restart: always` 拉起 |
+| 健康检查 | `HEALTHCHECK` 打 `127.0.0.1:8641/readyz`（间隔 30s / 超时 5s / 3 次失败）。失败只把容器标成 `unhealthy`（`docker inspect .State.Health` 可见、`readyz` 同时 503），docker 本身**不会**因不健康重启容器；要自动重启就在宿主加 `autoheal`（runbook §19 第 9 步，可选） |
 | 资源 | `mem_limit: 1.5g`、`restart: always`、`logging: json-file, max-size=10m, max-file=3` |
-| 卷 | `/data/blog/db`（SQLite）、`/data/blog/uploads`（图片） |
+| 卷 | `/data/blog/db`（SQLite）、`/data/blog/uploads`（图片）、`/data/blog/files`（附件）、`/data/blog/backup`（备份落点，必须与前三者同一个文件系统） |
 | nginx | 80 → `127.0.0.1:8640`；`client_max_body_size 32m`；`proxy_request_buffering off`；`/uploads/` 直出磁盘；`valid_referers` 防盗链 |
-| TLS | certbot 自动签发 + 自动续期（systemd timer），`renew --dry-run` 每月跑一次；443 强制跳转 |
+| TLS | certbot 自动签发 + 自动续期（systemd timer），`renew --dry-run` 每月跑一次；443 强制跳转。容器只**只读**看 `tls.cert_file`（宿主 `/etc/letsencrypt` 挂载）判断剩余天数，签发/续期仍在宿主 |
+| 告警 | 设置项 `notify`：任务进入 `failed`、磁盘 ≥ 阈值（默认 85%）、证书剩余天数不足（默认 14 天）→ webhook 或 Telegram（§13）；同一条告警 24h 内只发一次，条件恢复即清零，可用 `POST /notify/test` 自检 |
 | 防火墙 | `ufw` 仅开 22/80/443；8640/8641 不对公网开放（由 compose 的 127.0.0.1 绑定兜底） |
 | SSH | 禁 root 密码登录，仅密钥；可选 fail2ban |
 | 隧道 | `ssh -L 8641:127.0.0.1:8641 user@host`，浏览器访问 `http://localhost:8641` |
@@ -643,8 +663,8 @@ apps/web/
 | G4 公开端 | D9–D10 | 375px 无横向滚动；分页 + 标签组合正确；404 无堆栈；`srcset` 生效；系列/友链/关于页可访问 |
 | G5 互动 | D11–D12 | 评论 3/10min 限流 = 200 + `code 1005`；嵌套 ≤2 层；spam 不进公开列表；点赞幂等；同 visitor 10 分钟内 PV 只 +1；`stats_daily` 按上海时区切日 |
 | G6 发布控制 | D13 | 定时发布到点生效（误差 <90s）；回滚生成新 revision；预览链接 24h 后 = 200 + `code 2006`；`cleanup` 能删掉构造的过期数据 |
-| G7 SEO 与部署 | D15–D16 | `sitemap.xml` 只含已发布（草稿/定时/归档/回收站一律不出现）且 XML 合法；`rss.xml` 可被解析、条目 ≤20 且带 `content:encoded` 全文；每页 JSON-LD 可 `JSON.parse` 且 `@type` 正确；每页恰好一个 `canonical` 且互不相同；`robots.txt` 含 `Sitemap:` 且禁 `/admin`、`/preview`、`/api/`；`kill -9` 后 30s 自愈；隧道可登录；nginx 静态图片可访问；证书续期 dry-run 通过 |
-| G8 备份、测试与性能 | D17–D19 | `VACUUM INTO` 可还原；空机恢复演练成功；单测/接口/E2E 全绿；service 覆盖率 ≥70%；TTFB <300ms；LCP <2.5s；内存不超 §15 |
+| G7 SEO 与部署 | D15–D16 | `sitemap.xml` 只含已发布（草稿/定时/归档/回收站一律不出现）且 XML 合法；`rss.xml` 可被解析、条目 ≤20 且带 `content:encoded` 全文；每页 JSON-LD 可 `JSON.parse` 且 `@type` 正确；每页恰好一个 `canonical` 且互不相同；`robots.txt` 含 `Sitemap:` 且禁 `/admin`、`/preview`、`/api/`；`docker kill` 与 `pkill -9 blogd` 两种杀法都在 30s 内自愈；隧道可登录（`/admin/login` 出登录页）；nginx 直出静态图片 200 且带 `immutable`、`/admin` 与 `/api/admin` 在公网 404；`certbot renew --dry-run` 通过。逐条命令见 runbook §19 |
+| G8 备份、测试与性能 | D17–D19 | `VACUUM INTO` 可还原；空机恢复演练成功（runbook §21）；`POST /notify/test` 能真实送达（webhook / Telegram 至少一种）；`integrity_check` 任务通过；单测/接口/E2E 全绿；service 覆盖率 ≥70%；TTFB <300ms；LCP <2.5s；内存不超 §15 |
 
 **测试要求**：状态机与任务调度必须有单元测试；每个 API 至少一条 happy path + 一条错误路径；禁止提交无测试的状态迁移代码。
 
@@ -808,6 +828,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.16 | 2026-10-21 | **D16 部署 + D17 备份/告警（M9b / M10）**：新增告警通道（§13 / §14）——事件 `job_failed` / `disk_high` / `cert_expiring`，渠道 webhook 或 Telegram（配置存 `settings.notify`，密钥永不回显，`null` 保持不变、`""` 清空），投递成功后 24h 静默、失败 15 分钟重试、条件恢复即清零，状态存 `settings.notify_state`；新增 `POST /notify/test`（按已保存配置立刻投递，不看 `enabled`）；新增每周任务 `integrity_check`（周一 04:30，`PRAGMA integrity_check` + 备份快照文件头校验）并加入 `POST /jobs` 手动白名单；新增配置 `tls.cert_file`（`BLOG_TLS_CERT_FILE`，容器只读看一眼宿主 certbot 证书的 `NotAfter`，留空跳过）；`PUT /settings` 只改 `notify` 时**不动** `content_version`；管理端设置页新增告警卡片与「发送测试」。**部署产物修正**：compose 显式 healthcheck + `stop_grace_period: 20s` + 可选 `/etc/letsencrypt` 只读挂载；nginx `/uploads/` 从 `alias` 改 `root`（1.24 上 `alias`+`try_files` 会拼错路径）、补 HSTS、去掉与 Go 重复的 `nosniff`；镜像装 `procps` 以支持自愈演练；§14 修正 s6/healthcheck 语义（进程退出由 s6 原地拉起，unhealthy 不会自动重启容器）；runbook 新增 §19 上线交接清单（含 G7 逐条命令与回执）、§20 告警、§21 空机恢复演练 |
 | 1.15 | 2026-10-21 | **D15 SEO（M9a）**：Next 侧新增 `/sitemap.xml`（route handler，每请求取数，只含已发布文章 + 未删除静态页 + 非空标签/系列，`public, max-age=600`）、`/rss.xml`（RSS 2.0，最近 20 篇，`content:encoded` 全文）、`/robots.txt`（禁 `/admin`、`/preview`、`/api/`，带 `Sitemap:`）；每页 `generateMetadata` 给唯一 `title`/`description`/`canonical` 与 OG/Twitter 卡片（文章页 `og:type=article` + 封面 1600 变体），`/search`、`/preview/*`、`/admin*` 一律 `noindex`；文章页输出 `Article`、首页输出 `WebSite`+`SearchAction` JSON-LD（`<script>` 带 CSP nonce）；公开 API 新增 `GET /pages`（静态页清单，sitemap 用）；§3.1 目录、§11 SEO 行、§12 缓存表、§16 G7 断言与 `runbook` §18 同步 |
 | 1.14 | 2026-10-20 | **连接建立后一律 HTTP 200，状态只存在 `code` 里**（gin-vue-admin 风格）：`response.FailWithDetailed` 固定 `200` 并保留 `Abort`；`data` 语义不变（无附加数据仍为 `null`，字段错误仍为 `[{field,message}]`）；`errs.HTTPStatus` / `AppError.HTTPStatus` 保留但不再决定状态码；前端 `fetcher.ts`、`lib/api/public.ts`（`isApiError` → `isApiCode`）、`middleware.ts`（按 `code 1007` 回 410 页面）、评论与点赞组件的错误分支全部改按 `code`；§5 明确**例外清单**（只有 HTTP 协议语义才保留真实状态码）：健康检查 `200/503`、静态文件直出 `200/404`、附件文件流 `200/206`、跳转 `301/302`、ETag `304`；**路由不存在**与 **Next 转发失败**也改成 `200` + `code 1002` / `code 1006`。登录改为**先判锁定再判限流**：连续 5 次错误口令后第 6 次直接 `code 2005`，不再被 `code 1005` 挡住。§2 拓扑与 §16 G1 断言同步（8640 上 `/api/admin/posts`、`/healthz` 改为 `200 + code 1002`） |
 | 1.13 | 2026-10-20 | **图床下线，图片与附件全部本地自托管**：删除 Cloudreve/WebDAV 集成（`cloudreve.*` 配置、`gowebdav` 依赖、`media_archive` 任务、`media.archive` 审计、设置页图床块），C10 扩为"图片与附件都不入库、不上 CDN/对象存储"；原图**永久保留**（取消 30 天清理），「查看原图」改指同源 `/uploads/{key}/original.{ext}`；新增附件本地上传 `POST /attachments/upload`（multipart，落 `file.dir/{sha[:2]}/{sha256}{ext}`，按 sha256 去重）与附件安全黑名单（`415/2007`、`413/2008`），公开 `/attachments/{id}/go` 对本地附件直接下发（`octet-stream` + `Content-Disposition` + `nosniff` + Range）、对外链附件仍 302；新增 `GET /storage` 与 `POST /storage/cleanup`（占用统计、孤儿与缺失对账、孤儿清理）与 `DELETE /media/{id}/original`（删原图保变体）；`post_attachments` 增 `storage_key`/`mime`（migration 000003），`backup` 同时快照 `files/`，`cleanup` 不再动原图与附件 |

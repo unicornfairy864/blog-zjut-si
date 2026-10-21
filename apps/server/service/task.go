@@ -177,6 +177,108 @@ func (s TaskService) HandleBackup(_ context.Context, _ *model.Job) error {
 	return nil
 }
 
+// HandleIntegrityCheck 每周校验数据库完整性（§14）。
+//
+// 两件事：库自身跑一次 `PRAGMA integrity_check`（必须是 ok），再确认最近一次备份的库快照
+// 存在且是完整的 SQLite 文件（只看文件头，不另开连接，避免与主连接抢锁）。
+// 校验不通过时返回错误 → 任务进入 failed → 触发一次告警（§13）。
+func (s TaskService) HandleIntegrityCheck(_ context.Context, _ *model.Job) error {
+	result, err := integrityCheck()
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(result, "ok") {
+		return fmt.Errorf("数据库完整性校验未通过: %s", truncateRunes(result, 200))
+	}
+
+	name, size, err := latestBackupSnapshot()
+	if err != nil {
+		// 还没备份过不算"库坏了"：记一条 warn，任务仍然算通过。
+		global.Log.Warn("未找到可校验的备份快照", "err", err)
+		return nil
+	}
+
+	global.Log.Info("数据库完整性校验通过", "backup", name, "backup_bytes", size)
+	return nil
+}
+
+// integrityCheck 在库上跑一次 `PRAGMA integrity_check`，返回首行结果（正常是 "ok"）。
+func integrityCheck() (string, error) {
+	rows, err := global.DB.Raw("PRAGMA integrity_check").Rows()
+	if err != nil {
+		return "", fmt.Errorf("执行 integrity_check 失败: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("读取 integrity_check 结果失败: %w", err)
+		}
+		return "", errors.New("integrity_check 没有返回结果")
+	}
+	var result string
+	if err := rows.Scan(&result); err != nil {
+		return "", fmt.Errorf("解析 integrity_check 结果失败: %w", err)
+	}
+	return result, nil
+}
+
+// sqliteMagic 是 SQLite 文件头；备份被截断或写坏时这里就对不上。
+const sqliteMagic = "SQLite format 3\x00"
+
+// latestBackupSnapshot 找最近一次备份的库快照并校验文件头，返回文件名与字节数。
+func latestBackupSnapshot() (string, int64, error) {
+	dir := global.Config.Backup.Dir
+	if dir == "" {
+		return "", 0, errors.New("未配置 backup.dir")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", 0, fmt.Errorf("读取备份目录失败: %w", err)
+	}
+
+	newest := ""
+	var newestMod time.Time
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "blog-") || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		if newest == "" || info.ModTime().After(newestMod) {
+			newest, newestMod = name, info.ModTime()
+		}
+	}
+	if newest == "" {
+		return "", 0, errors.New("备份目录里还没有数据库快照")
+	}
+
+	path := filepath.Join(dir, newest)
+	file, err := os.Open(path)
+	if err != nil {
+		return newest, 0, fmt.Errorf("打开备份快照失败: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	header := make([]byte, len(sqliteMagic))
+	if _, err := io.ReadFull(file, header); err != nil {
+		return newest, 0, fmt.Errorf("读取备份快照失败: %w", err)
+	}
+	if string(header) != sqliteMagic {
+		return newest, 0, fmt.Errorf("备份快照 %s 不是完整的 SQLite 文件", newest)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		return newest, 0, fmt.Errorf("读取备份快照大小失败: %w", err)
+	}
+	return newest, info.Size(), nil
+}
+
 // HandleLinkCheck 巡检已发布文章里的外链与正文图片（§13），结果写入 link_checks。
 func (s TaskService) HandleLinkCheck(ctx context.Context, _ *model.Job) error {
 	posts, err := model.ListPublishedForLinkCheck(global.DB)

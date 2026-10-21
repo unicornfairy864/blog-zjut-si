@@ -793,12 +793,15 @@ type SettingsView struct {
 	File           SettingsFile   `json:"file"`
 	Task           SettingsTask   `json:"task"`
 	DB             SettingsDB     `json:"db"`
+	Notify         NotifyView     `json:"notify"`
 }
 
-// SettingsUpdate 是设置更新入参；nil 表示不修改（§5：只允许改这两项）。
+// SettingsUpdate 是设置更新入参；nil 表示不修改（§5：只允许改可写项）。
 type SettingsUpdate struct {
 	ImgBaseURL   *string
 	SiteTimezone *string
+	// Notify 是告警通道配置（§13）；nil 表示不改。它不属于"内容"，改了不动 content_version。
+	Notify *NotifyUpdate
 }
 
 // Settings 汇总当前可写项与只读回显；不含任何口令（§5 / §9）。
@@ -815,6 +818,10 @@ func (s ContentService) Settings() (SettingsView, error) {
 		timezone = publicDefaultTimezone
 	}
 	version, err := ServiceGroupApp.Setting.Int64(model.SettingContentVersion, publicDefaultContentVersion)
+	if err != nil {
+		return SettingsView{}, err
+	}
+	notify, err := ServiceGroupApp.Notify.View()
 	if err != nil {
 		return SettingsView{}, err
 	}
@@ -835,7 +842,8 @@ func (s ContentService) Settings() (SettingsView, error) {
 			Enabled:         global.Config.Task.Enabled,
 			IntervalSeconds: global.Config.Task.IntervalSeconds,
 		},
-		DB: SettingsDB{Path: global.Config.DB.Path},
+		DB:     SettingsDB{Path: global.Config.DB.Path},
+		Notify: notify,
 	}, nil
 }
 
@@ -846,9 +854,10 @@ type settingWrite struct {
 	value string
 }
 
-// UpdateSettings 写入 imgBaseUrl / siteTimezone 并递增 content_version（§5）。
+// UpdateSettings 写入可写项；内容类改动会递增 content_version（§5）。
 //
 // 递增是硬要求：公开读接口的 ETag 依赖 content_version，不递增会让前端一直命中旧缓存。
+// 告警配置（notify）不属于内容，改它**不动** content_version，也不该让全站 ETag 失效。
 func (s ContentService) UpdateSettings(in SettingsUpdate, actor PostActor) (SettingsView, error) {
 	writes := make([]settingWrite, 0, 2)
 
@@ -867,20 +876,34 @@ func (s ContentService) UpdateSettings(in SettingsUpdate, actor PostActor) (Sett
 		writes = append(writes, settingWrite{key: model.SettingSiteTimezone, field: "siteTimezone", value: value})
 	}
 
+	// 先写告警配置：它自带校验，失败时不该留下半截内容改动。
+	var notifyMeta map[string]any
+	if in.Notify != nil {
+		if _, err := ServiceGroupApp.Notify.Update(*in.Notify); err != nil {
+			return SettingsView{}, err
+		}
+		notifyMeta = notifyAuditMeta(*in.Notify)
+	}
+
 	// 空请求体不改任何东西，也不动 content_version（没有内容变化就不该让前端缓存失效）。
-	if len(writes) == 0 {
+	if len(writes) == 0 && notifyMeta == nil {
 		return s.Settings()
 	}
 
-	meta := make(map[string]any, len(writes))
+	meta := make(map[string]any, len(writes)+1)
 	for _, write := range writes {
 		if err := ServiceGroupApp.Setting.PutString(write.key, write.value); err != nil {
 			return SettingsView{}, err
 		}
 		meta[write.field] = write.value
 	}
-	if err := ServiceGroupApp.Setting.BumpContentVersion(); err != nil {
-		return SettingsView{}, err
+	if notifyMeta != nil {
+		meta["notify"] = notifyMeta
+	}
+	if len(writes) > 0 {
+		if err := ServiceGroupApp.Setting.BumpContentVersion(); err != nil {
+			return SettingsView{}, err
+		}
 	}
 
 	ServiceGroupApp.Audit.Write(AuditInput{
@@ -892,6 +915,38 @@ func (s ContentService) UpdateSettings(in SettingsUpdate, actor PostActor) (Sett
 		IP:         actor.IP,
 	})
 	return s.Settings()
+}
+
+// notifyAuditMeta 把告警配置的改动压成审计摘要。
+//
+// 审计日志会被长期保留，所以只记"非密钥"字段与两个"配没配"的布尔值（§9）。
+func notifyAuditMeta(in NotifyUpdate) map[string]any {
+	meta := map[string]any{}
+	if in.Enabled != nil {
+		meta["enabled"] = *in.Enabled
+	}
+	if in.Channel != nil {
+		meta["channel"] = strings.ToLower(strings.TrimSpace(*in.Channel))
+	}
+	if in.WebhookURL != nil {
+		meta["webhookUrlSet"] = strings.TrimSpace(*in.WebhookURL) != ""
+	}
+	if in.TelegramBotToken != nil {
+		meta["telegramBotTokenSet"] = strings.TrimSpace(*in.TelegramBotToken) != ""
+	}
+	if in.TelegramChatID != nil {
+		meta["telegramChatIdSet"] = strings.TrimSpace(*in.TelegramChatID) != ""
+	}
+	if in.Events != nil {
+		meta["events"] = *in.Events
+	}
+	if in.DiskThresholdPercent != nil {
+		meta["diskThresholdPercent"] = *in.DiskThresholdPercent
+	}
+	if in.CertExpireDays != nil {
+		meta["certExpireDays"] = *in.CertExpireDays
+	}
+	return meta
 }
 
 // validateTaxonomyFields 校验分类的 name 与 description（§5：name 1–200、description ≤500）。

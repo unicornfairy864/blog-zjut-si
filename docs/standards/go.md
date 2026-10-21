@@ -22,6 +22,10 @@ core/*、utils ──▶ 不依赖业务包
 
 `model` 对外只暴露 `model.ErrNotFound` 等哨兵错误，不让 `gorm.ErrRecordNotFound` 泄漏到上层。
 
+**反向回调例外**：`service` 依赖 `task`（投递任务后唤醒调度器），所以 `task` 需要业务能力时只能留函数位，
+由 `initialize` 注入（例：`task.SetJobFailedHook(service.ServiceGroupApp.Notify.JobFailed)`，用于任务失败告警）。
+除了这种"装配期注入的回调"，`task` 不得引用 `service`。
+
 ## 2. 命名与注释
 
 - 标识符英文，注释中文；导出符号必须有注释，且以符号名开头。

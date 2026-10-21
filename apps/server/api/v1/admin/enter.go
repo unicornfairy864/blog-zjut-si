@@ -10,6 +10,7 @@ type ApiGroup struct {
 	Content ContentApi
 	Job     JobApi
 	Media   MediaApi
+	Notify  NotifyApi
 	Post    PostApi
 	Setting SettingApi
 	Stats   StatsApi

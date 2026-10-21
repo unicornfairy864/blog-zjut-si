@@ -66,6 +66,9 @@ func Run() {
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
+	// 任务进入 failed 时的告警出口（§13）。task 不能反向依赖 service，所以在这里注入。
+	task.SetJobFailedHook(service.ServiceGroupApp.Notify.JobFailed)
+
 	group.Go(func() error {
 		handlers := map[string]task.Handler{
 			model.JobTypePublishScheduled: service.ServiceGroupApp.Task.HandlePublishScheduled,
@@ -73,8 +76,14 @@ func Run() {
 			model.JobTypeLinkCheck:        service.ServiceGroupApp.Task.HandleLinkCheck,
 			model.JobTypeBackup:           service.ServiceGroupApp.Task.HandleBackup,
 			model.JobTypeCleanup:          service.ServiceGroupApp.Task.HandleCleanup,
+			model.JobTypeIntegrityCheck:   service.ServiceGroupApp.Task.HandleIntegrityCheck,
 		}
 		return task.NewScheduler(global.Config.Task, handlers).Start(groupCtx)
+	})
+
+	// 磁盘与证书的巡检（§13 / §14）：与调度器分开跑，互不阻塞。
+	group.Go(func() error {
+		return service.ServiceGroupApp.Notify.Watch(groupCtx)
 	})
 
 	group.Go(func() error {

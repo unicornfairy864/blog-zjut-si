@@ -21,10 +21,11 @@ const (
 	JobTypeLinkCheck        = "link_check"
 	JobTypeBackup           = "backup"
 	JobTypeCleanup          = "cleanup"
+	JobTypeIntegrityCheck   = "integrity_check"
 )
 
 // ManualJobTypes 是允许管理端手动投递的任务类型（§5 `POST /jobs`）。
-var ManualJobTypes = []string{JobTypeCleanup, JobTypeBackup, JobTypeLinkCheck}
+var ManualJobTypes = []string{JobTypeCleanup, JobTypeBackup, JobTypeLinkCheck, JobTypeIntegrityCheck}
 
 // DefaultJobMaxAttempts 是任务默认最大尝试次数。
 const DefaultJobMaxAttempts = 3

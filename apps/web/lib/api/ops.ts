@@ -62,8 +62,13 @@ export const JOB_STATUSES = ["pending", "running", "done", "failed"] as const;
 
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
-/** 手动投递只允许这三类（D13：留给运维与自测，其余类型由调度器投递）。 */
-export const MANUAL_JOB_TYPES = ["cleanup", "backup", "link_check"] as const;
+/** 手动投递只允许这四类（D13/D17：留给运维与自测，其余类型由调度器投递）。 */
+export const MANUAL_JOB_TYPES = [
+  "cleanup",
+  "backup",
+  "link_check",
+  "integrity_check",
+] as const;
 
 export type ManualJobType = (typeof MANUAL_JOB_TYPES)[number];
 

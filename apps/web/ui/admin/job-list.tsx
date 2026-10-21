@@ -51,16 +51,18 @@ const TYPE_LABEL: Record<string, string> = {
   cleanup: "清理",
   backup: "备份",
   link_check: "检查外链",
+  integrity_check: "校验数据库",
   publish_scheduled: "定时发布",
   media_process: "媒体处理",
   media_archive: "媒体归档",
 };
 
-/** 手动投递按钮（D13：只允许 cleanup / backup / link_check）。 */
+/** 手动投递按钮（D13/D17：只允许 cleanup / backup / link_check / integrity_check）。 */
 const MANUAL_ACTIONS: { type: ManualJobType; label: string }[] = [
   { type: "cleanup", label: "立即清理" },
   { type: "backup", label: "立即备份" },
   { type: "link_check", label: "检查外链" },
+  { type: "integrity_check", label: "校验数据库" },
 ];
 
 /** 从查询串读页码；缺省或非法值一律回第 1 页。 */
@@ -160,7 +162,7 @@ export function JobList() {
       <div className="space-y-2 rounded-lg border border-border p-4">
         <h2 className="text-sm font-semibold">手动投递</h2>
         <p className="text-xs text-muted-foreground">
-          只允许 cleanup / backup / link_check，投递后立即入队，不等周期调度。
+          只允许 cleanup / backup / link_check / integrity_check，投递后立即入队，不等周期调度。
         </p>
         <div className="flex flex-wrap gap-2">
           {MANUAL_ACTIONS.map((action) => (

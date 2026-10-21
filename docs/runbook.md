@@ -1,7 +1,7 @@
 # 运行手册（Runbook）
 
-> 覆盖范围：D1–D3（骨架、迁移、双 listener、鉴权）。备份/恢复、告警、证书续期在 D16–D17 补齐。
-> 契约以 [`agent.md`](agent.md) 为准；本文只写"怎么做"。
+> 覆盖范围：D1–D17（骨架、鉴权、内容、媒体、公开端、互动、发布控制、SEO、部署、备份与告警）。
+> 上线交接清单见 §19，告警见 §20，恢复演练见 §21。契约以 [`agent.md`](agent.md) 为准；本文只写"怎么做"。
 
 ## 1. 拓扑与端口
 
@@ -108,8 +108,8 @@ docker compose logs blog | jq -c 'select(.request_id=="<id>")'
 
 ## 6. 备份与恢复
 
-`backup` 任务（D14 已落地，每日 03:00 / 可在 `/admin/jobs` 手动投递）会做 `VACUUM INTO` 与
-`uploads`、`files` 两个目录的硬链接快照，见 §11.4。下面是不依赖任务的手工兜底：
+`backup` 任务（每日 03:00 / 可在 `/admin/jobs` 手动投递）会做 `VACUUM INTO` 与
+`uploads`、`files` 两个目录的硬链接快照，见 §11.5。下面是不依赖任务的手工兜底：
 
 ```bash
 # 备份：先停容器，避免 WAL 半写
@@ -123,11 +123,18 @@ docker compose start blog
 cd /srv/blog/deploy && docker compose stop blog
 sudo cp -a /backup/blog-2026-10-18.db   /data/blog/db/blog.db
 sudo rm -f /data/blog/db/blog.db-wal /data/blog/db/blog.db-shm
+sudo chown -R 1000:1000 /data/blog/db
 docker compose start blog
+
+# 恢复后自检（有输出 "ok" 才算干净）
+sqlite3 /data/blog/db/blog.db 'PRAGMA integrity_check;'
 ```
 
 **说明**：`blog.db` 里的 `post_attachments.storage_key` / `media.storage_key` 只是相对路径，
 恢复时必须把 `uploads` 与 `files` 一起还原，否则管理端存储页会把它们全部报成"缺失文件"。
+还原目录时同样要 `sudo chown -R 1000:1000 /data/blog`，并重跑一次 §11.1 的 `setfacl`。
+
+更完整的"空机恢复"步骤（换机器、从零装）见 §21。
 
 ## 7. 环境变量
 
@@ -153,6 +160,7 @@ docker compose start blog
 | `BLOG_FILE_DIR` | `./data/files` | 附件目录；容器里 compose 覆盖为 `/data/blog/files` |
 | `BLOG_BACKUP_DIR` | `./data/backup` | `backup` 任务的落点：`blog-YYYYMMDD.db` + `uploads-YYYYMMDD/` + `files-YYYYMMDD/`；容器里 compose 覆盖为 `/data/blog/backup`，必须与 uploads/files 同一个文件系统 |
 | `BLOG_CONFIG` | 空 | 显式指定配置文件 |
+| `BLOG_TLS_CERT_FILE` | 空 | 容器内可见的 `fullchain.pem`；留空则跳过证书到期检查（§20）。用了它要同时打开 compose 里 `/etc/letsencrypt` 只读挂载 |
 | `BLOG_MIGRATE_ONLY` | 空 | 设为 `1` 时只迁移后退出 |
 | `BLOG_ADMIN_USERNAME` / `BLOG_ADMIN_PASSWORD` | 空 | 首次引导创建管理员 |
 
@@ -170,6 +178,11 @@ docker compose start blog
 | 容器启动即退出，日志 `加载配置失败` + `创建上传/附件目录失败: mkdir ./data: permission denied` | 数据目录没建或属主不是 1000：`sudo mkdir -p /data/blog/{db,uploads,files,backup} && sudo chown -R 1000:1000 /data/blog`；确认 compose 的 `BLOG_*_DIR` 都是 `/data/blog/...` 绝对路径 |
 | 容器起来了但 `backup` 任务失败，日志 `创建备份目录失败` | 备份目录只在任务执行时创建，不影响启动：`sudo mkdir -p /data/blog/backup && sudo chown 1000:1000 /data/blog/backup` |
 | `readyz` 503 | 看 `checks` 数组里哪一项 false：磁盘满 / uploads 不可写 / 队列积压 |
+| 容器状态是 `unhealthy` 但进程还在 | `docker inspect --format '{{json .State.Health}}' zjut-blog`，看最后一次 `readyz` 的失败项。unhealthy **不会**自动重启容器，见 §19 第 9 步 |
+| 公网 `/uploads/xx.webp` 返回 403 | 目录缺 `x` 权限（www-data 走不进去）：重跑 §11.1 的 `setfacl`；返回 404 才是路径写错 |
+| 公网返回 502 | nginx 连不上 8640：`docker compose ps` 看容器是否在跑、`ss -lntp \| grep 8640` 看端口是否只绑在回环 |
+| 公网 `/admin` 返回 404（这是对的） | 管理端只在 8641，走 SSH 隧道（§3）。nginx 那条 `location ~ ^/(admin\|api/admin)` 就是干这个的 |
+| 告警一直没收到 | 先在「设置 → 告警通知」点「发送测试」；`docker compose logs blog \| grep 告警` 看投递失败原因（§20） |
 
 ## 9. 发布与回滚
 
@@ -177,18 +190,36 @@ docker compose start blog
 2. `docker compose up -d --build`，观察 `logs -f` 与 `readyz`。
 3. 回滚：`git checkout <上一个 tag>` → `docker compose up -d --build`；若涉及数据变更，同时恢复备份。
 
-## 10. 证书与 nginx（D16 落地）
+## 10. 证书与 nginx（D16）
 
-`deploy/nginx/blog.conf` 已给出 80/443 双 server 块与 `certbot` 续期路径；人工步骤：
+完整落地顺序见 §19；这一节只写 nginx / certbot 本身。
 
 ```bash
-sudo cp deploy/nginx/blog.conf /etc/nginx/sites-available/blog.conf
+# 1) 落地 nginx 片段（conf.d 里的公共参数文件必须先存在，否则 nginx -t 报 include 找不到）
 sudo cp deploy/nginx/blog_proxy_params /etc/nginx/conf.d/blog_proxy_params
+sudo cp deploy/nginx/blog.conf          /etc/nginx/sites-available/blog.conf
 sudo ln -sf /etc/nginx/sites-available/blog.conf /etc/nginx/sites-enabled/blog.conf
+sudo mkdir -p /var/www/certbot
+
+# 2) 首次签发（--nginx 会自己改 server 块；若已在 blog.conf 里写好证书路径，
+#    先用 `certbot certonly --webroot -w /var/www/certbot -d blog.zjut.si`）
+sudo certbot --nginx -d blog.zjut.si
+
+# 3) 语法与重载
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d blog.zjut.si        # 首次
-sudo certbot renew --dry-run                # 每月演练
+
+# 4) 续期演练与定时器自检（每月跑一次 dry-run）
+sudo certbot renew --dry-run
+systemctl list-timers 'certbot*'          # 应能看到 certbot.timer
 ```
+
+- 证书路径写死在 `blog.conf` 的 `ssl_certificate`；证书名不是 `blog.zjut.si` 时同步改。
+- **只读看一眼证书**（可选，给告警用）：打开 `deploy/compose.yaml` 里 `/etc/letsencrypt:/etc/letsencrypt:ro`
+  那行挂载，并在 `.env` 设 `BLOG_TLS_CERT_FILE=/etc/letsencrypt/live/blog.zjut.si/fullchain.pem`，
+  再 `docker compose up -d`。不设就跳过证书检查，不影响其它功能（§20）。
+- nginx 直出图片依赖宿主目录的 ACL（§11.1）；`/uploads/` 用的是 `root /data/blog`（不是 `alias`），
+  改这一段时注意别把 `/data/blog` 整个暴露出去。
+- 公网侧永远不该出现管理端：`location ~ ^/(admin|api/admin)` 直接 404，`/api/admin/*` 不会落到 `/api/` 那条规则上。
 
 ## 11. 本地存储：图片与附件
 
@@ -523,12 +554,12 @@ sqlite3 /data/blog/db/blog.db "UPDATE preview_tokens SET expires_at = strftime('
 
 ## 16. 清理与备份自测（D13 / G6 的 cleanup 断言）
 
-周期任务按站点时区在 03:00（backup）/ 04:00（cleanup）/ 周一 05:00（link_check）自动入队；
+周期任务按站点时区在 03:00（backup）/ 04:00（cleanup）/ 周一 04:30（integrity_check）/ 周一 05:00（link_check）自动入队；
 **判据是 jobs 表当天是否已有同类型记录**，所以重启不会重复跑，也不会漏跑。
 自测时不用等时刻点，直接手动投递：
 
 ```bash
-# 手动投递（白名单只有 cleanup / backup / link_check）
+# 手动投递（白名单只有 cleanup / backup / link_check / integrity_check）
 curl -s -X POST http://127.0.0.1:8641/api/admin/jobs \
   -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"type":"cleanup"}'
 ```
@@ -569,7 +600,19 @@ ls -lh /data/blog/backup/   # blog-YYYYMMDD.db + uploads-YYYYMMDD/ + files-YYYYM
 ```
 
 - 库保留 30 天、图片与附件快照保留 90 天，超期由下一次 `backup` 自己清掉。
-- `VACUUM INTO` 出来的 `.db` 可直接 `sqlite3 blog-YYYYMMDD.db .tables` 验证；恢复步骤见 §9。
+- `VACUUM INTO` 出来的 `.db` 可直接 `sqlite3 blog-YYYYMMDD.db .tables` 验证；恢复步骤见 §6，空机演练见 §21。
+
+完整性校验（`integrity_check` 任务，每周一 04:30 自动跑）：
+
+```bash
+curl -s -X POST http://127.0.0.1:8641/api/admin/jobs \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"type":"integrity_check"}'
+# 期望：jobs 里该条 done；日志里出现「数据库完整性校验通过 backup=blog-YYYYMMDD.db backup_bytes=…」
+docker compose logs blog | grep 完整性
+sqlite3 /data/blog/backup/blog-YYYYMMDD.db 'PRAGMA integrity_check;'   # ok
+```
+
+- 校验不通过（库损坏、快照被截断）时任务停在 `failed`，并触发一次告警（§20）。
 
 ---
 
@@ -660,4 +703,336 @@ curl -s $BASE/preview/<token> | grep -o '<meta name="robots"[^>]*>'
 - sitemap 里出现草稿时：先用 `GET /api/posts?status=draft` 确认草稿确实不在公开列表里，再看是不是被
   `(public)/[slug]` 这个动态路由吃掉了（Next 里静态路由优先，正常不会）。
 - `/preview/*` 的 410 页面由 `middleware.ts` 返回（页面级状态码），与本节检查无关。
+
+---
+
+## 19. 上线交接清单（D16 / G7 全过）
+
+**部署动作全部由运维执行**；这一节按顺序做完即可，每一步都给了"看什么算过"。回执填在文末。
+
+### 1. 主机准备（Ubuntu 24.04）
+
+```bash
+sudo timedatectl set-timezone Asia/Shanghai
+sudo apt update && sudo apt install -y docker.io docker-compose-v2 nginx certbot python3-certbot-nginx sqlite3 acl
+sudo ufw allow 22,80,443/tcp && sudo ufw enable && sudo ufw status verbose
+
+# SSH 加固（先确认密钥登录可用再关口令！）
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sudo sshd -t && sudo systemctl reload ssh
+```
+
+过：`ufw status` 只有 22/80/443；**8640/8641 不在公网**（`curl -m3 http://<公网IP>:8641` 连接被拒）。
+
+### 2. 取代码与配置
+
+```bash
+sudo git clone git@github.com:unicornfairy864/blog-zjut-si.git /srv/blog
+cd /srv/blog/deploy
+cp .env.example .env
+vi .env          # 填 BLOG_ADMIN_USERNAME / BLOG_ADMIN_PASSWORD（≥16 位）；确认没有 BLOG_CLOUDREVE_* 之类的历史变量
+```
+
+过：`.env` 里 `BLOG_DB_PATH` 与三个目录变量（`BLOG_UPLOAD_DIR` / `BLOG_FILE_DIR` / `BLOG_BACKUP_DIR`）都是 `/data/blog/...` 绝对路径；口令 ≥16 位。
+
+### 3. 数据目录与权限
+
+```bash
+sudo mkdir -p /data/blog/{db,uploads,files,backup}
+sudo chown -R 1000:1000 /data/blog
+sudo setfacl -R  -m u:www-data:rX /data/blog/uploads
+sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
+```
+
+过：`ls -ld /data/blog/*` 属主 1000；`getfacl /data/blog/uploads | grep www-data` 有两条（含 default）。
+
+### 4. 构建并启动
+
+```bash
+cd /srv/blog/deploy && docker compose up -d --build
+docker compose ps                 # State 应为 Up (healthy)，首次可能要等 start_period 40s
+docker compose logs --tail=50
+curl -s http://127.0.0.1:8641/healthz        # {"status":"ok","time":…}（健康检查是 §5 例外，不走信封）
+curl -s http://127.0.0.1:8641/readyz | jq    # 四项 checks 全 true
+```
+
+过：`readyz` 的 `database` / `disk` / `uploads` / `queue` 全 `ok:true`；日志里有"任务调度器启动"。
+
+### 5. nginx 与证书
+
+按 §10 做完，然后：
+
+```bash
+sudo nginx -t
+curl -sI http://blog.zjut.si | head -1                       # 301 → https
+curl -sI https://blog.zjut.si | head -1                      # 200
+echo | openssl s_client -connect blog.zjut.si:443 -servername blog.zjut.si 2>/dev/null | openssl x509 -noout -dates -issuer
+sudo certbot renew --dry-run
+systemctl list-timers 'certbot*'
+```
+
+过：80→301；443 证书链完整、签发者 Let's Encrypt；`--dry-run` 输出 "Congratulations" 或 "simulating renewal" 无报错；timer 存在。
+
+### 6. 公网逐条验（G7 前半 + 静态资源）
+
+```bash
+BASE=https://blog.zjut.si
+curl -s $BASE/sitemap.xml | head -3                          # <urlset>，不含草稿
+curl -sI $BASE/sitemap.xml | grep -i cache-control           # public, max-age=600
+curl -s $BASE/rss.xml | grep -c '<item>'
+curl -s $BASE/robots.txt                                     # 含 Sitemap: 与三条 Disallow
+curl -s $BASE/ | grep -o '<link rel="canonical"[^>]*>'       # 恰好一条
+curl -s $BASE/posts/<slug> | grep -o '"@type":"Article"'     # 文章页 JSON-LD
+
+# 静态图片：先在 /admin/media 复制一张图的 URL（形如 /uploads/ab/<sha>/480.webp）
+curl -sI $BASE/uploads/ab/<sha>/480.webp | grep -i 'HTTP/\|cache-control\|content-type\|strict-transport'
+# 过：200 + public, max-age=31536000, immutable + image/webp
+
+# 管理端在公网必须不存在
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/admin/login          # 404
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/api/admin/posts       # 404
+# 公开边缘的兜底：路由不存在也是 200 + code 1002
+curl -s $BASE/api/does-not-exist                                     # {"code":1002,...}
+```
+
+详细 SEO 断言见 §18。
+
+### 7. 隧道与管理端（第二条通道）
+
+```bash
+ssh -N -L 8641:127.0.0.1:8641 user@your-host
+# 浏览器（务必用 localhost，别用 127.0.0.1）：http://localhost:8641/admin/login
+```
+
+过：能登录、能进 `/admin`；`/admin/jobs` 能看到周期任务；`/admin/storage` 的"缺失文件"为空。
+
+### 8. 自愈演练（G7 后半）
+
+```bash
+# A) 整个容器被强杀：靠 compose 的 restart: always 拉起
+time docker kill zjut-blog
+for i in $(seq 1 12); do sleep 3; printf '%2ds readyz=%s\n' $((i*3)) "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8641/readyz)"; done
+
+# B) 只杀 Go 进程：s6-supervise 原地拉起，容器不重启
+before=$(docker inspect -f '{{.State.StartedAt}}' zjut-blog)
+docker exec zjut-blog pkill -9 blogd
+sleep 5
+curl -s -o /dev/null -w 'readyz=%{http_code}\n' http://127.0.0.1:8641/readyz
+docker inspect -f '{{.State.StartedAt}}' zjut-blog     # 与 $before 相同 = 容器没重启
+docker logs --tail=30 zjut-blog | grep -i 'blogd\|exit'
+```
+
+过：两种杀法都在 30s 内恢复 `readyz=200`；B 的容器启动时间不变。
+
+### 9. 不健康就重启（可选，宿主侧）
+
+`HEALTHCHECK` 失败只标记 `unhealthy`，docker 不会自己重启容器。要"不健康就重启"，二选一：
+
+```bash
+# 方案 1：autoheal 边车（宿主再跑一个小容器，只读 docker.sock）
+docker run -d --name autoheal --restart=always \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  willfarrell/autoheal
+# 然后在 deploy/compose.yaml 的 blog 服务上加 labels: ["autoheal=true"]，再 docker compose up -d
+
+# 方案 2：systemd 定时器（不引入第三方镜像）
+sudo tee /etc/systemd/system/blog-health.service >/dev/null <<'EOF'
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'curl -fsS -m 5 http://127.0.0.1:8641/readyz >/dev/null || docker restart zjut-blog'
+EOF
+sudo tee /etc/systemd/system/blog-health.timer >/dev/null <<'EOF'
+[Timer]
+OnUnitActiveSec=5min
+OnBootSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl enable --now blog-health.timer
+```
+
+### 10. 告警与备份（D17）
+
+见 §20（配通道 + 发送测试）与 §21（备份 + 空机恢复演练）。
+
+### 回执（做完打勾，贴回给实现方）
+
+| # | 检查项 | 期望 | 实测 |
+| --- | --- | --- | --- |
+| 1 | `ufw status` | 只开 22/80/443 | |
+| 2 | `curl <公网IP>:8641` | 连接被拒 | |
+| 3 | `readyz` | 四项全 true | |
+| 4 | 80 → 443 | 301 | |
+| 5 | `certbot renew --dry-run` | 通过 | |
+| 6 | `/sitemap.xml`、`/rss.xml`、`/robots.txt` | 见 §18 | |
+| 7 | `/uploads/…/480.webp` | 200 + immutable | |
+| 8 | 公网 `/admin/login`、`/api/admin/posts` | 404 | |
+| 9 | 隧道登录 | 成功 | |
+| 10 | `docker kill` 自愈 | ≤30s 恢复 200 | |
+| 11 | `pkill -9 blogd` 自愈 | ≤30s 恢复 200 且容器未重启 | |
+| 12 | 告警「发送测试」 | 真实收到 | |
+| 13 | `backup` 任务 + 恢复演练 | 见 §21 | |
+
+---
+
+## 20. 监控与告警（D17）
+
+### 20.1 口径（agent.md §13 / §14）
+
+| 事件 | 触发条件 | 去重 |
+| --- | --- | --- |
+| `job_failed` | 任一任务进入 `failed`（尝试次数用尽，或任务类型未知） | 同事件 24h 内只发一次；成功发送后计数 |
+| `disk_high` | `BLOG_UPLOAD_DIR` 所在文件系统占用 ≥ 阈值（默认 85%） | 同上；占用降回阈值以下即清零 |
+| `cert_expiring` | `BLOG_TLS_CERT_FILE` 的 `NotAfter` 距今 < 阈值（默认 14 天） | 同上；换新证书后自动清零 |
+
+- 通道二选一：**webhook**（`POST` 一段 JSON）或 **Telegram**（Bot API `sendMessage`）。配置存在 `settings.notify`，只有管理端能读写，密钥回显时脱敏。
+- 投递失败会记 `warn` 日志，并在 15 分钟后重试（不是等 24h）；发送成功才进 24h 静默期。
+- 检查节奏：一个独立的巡检 goroutine **每 60s** 看一眼磁盘与证书（与调度器同生命周期、由 `errgroup` 托管，不额外起进程、不加表）。
+
+### 20.2 配置
+
+管理端「设置 → 告警通知」（`GET|PUT /api/admin/settings` 的 `notify` 字段）：
+
+```json
+{
+  "enabled": true,
+  "channel": "webhook",
+  "webhookUrl": "https://example.com/hook",
+  "telegramBotToken": "123456:ABC-DEF…",
+  "telegramChatId": "-1001234567890",
+  "events": { "jobFailed": true, "diskHigh": true, "certExpiring": true },
+  "diskThresholdPercent": 85,
+  "certExpireDays": 14
+}
+```
+
+- 密钥字段（`webhookUrl`、`telegramBotToken`）**从不回显**，只回 `webhookUrlSet` / `telegramBotTokenSet`；
+  PUT 时 `null` = 保持不变，`""` = 清空，非空 = 覆盖。
+- 打开 `enabled` 时对应通道的必填项不能为空，否则 `code 1003`（HTTP 200）。
+- `certFile`（来自 `BLOG_TLS_CERT_FILE`）与最近一次发送时间在界面上只读回显。
+- webhook 收到的报文：`{"source":"blog","event":"disk_high","level":"error","message":"…","at":"2026-10-21T17:30:00+08:00","details":{…}}`。
+
+### 20.3 自测（四条，都能在一分钟内看到结果）
+
+```bash
+BASE=http://127.0.0.1:8641
+# 登录后取 CSRF：见 §17 开头
+
+# 1) 通道本身：点「发送测试」，或
+curl -s -X POST $BASE/api/admin/notify/test -H "X-CSRF-Token: $CSRF"
+# 期望 {"code":0,...}，且目标处真的收到一条 [zjut.si 博客] 测试告警
+
+# 2) 磁盘事件：把阈值临时改成 1（任何磁盘都超过 1%）→ 一分钟内应收到 disk_high
+curl -s -X PUT $BASE/api/admin/settings -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \
+  -d '{"notify":{"diskThresholdPercent":1}}'
+# 收到后改回： -d '{"notify":{"diskThresholdPercent":85}}'
+
+# 3) 证书事件：把剩余天数临时改成 3650（需已配 BLOG_TLS_CERT_FILE）→ 一分钟内应收到 cert_expiring
+curl -s -X PUT $BASE/api/admin/settings -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \
+  -d '{"notify":{"certExpireDays":3650}}'
+# 收到后改回 14
+
+# 4) 任务失败：把备份落点改成不可写，投递一次 backup，约 6 分钟后（1m+5m 退避）进入 failed
+docker exec -u root zjut-blog chown root:root /data/blog/backup
+docker exec -u root zjut-blog chmod 500 /data/blog/backup
+curl -s -X POST $BASE/api/admin/jobs -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"type":"backup"}'
+# 收到 job_failed 后恢复权限：
+docker exec -u root zjut-blog chown 1000:1000 /data/blog/backup
+docker exec -u root zjut-blog chmod 750 /data/blog/backup
+```
+
+排错：`docker compose logs blog | grep -i 告警` 能看到"告警投递失败"与原因（DNS / 超时 / 4xx）。
+
+### 20.4 收到告警后做什么
+
+| 事件 | 处置 |
+| --- | --- |
+| `job_failed` | `/admin/jobs` 看该任务的 `lastError` → 修因（权限 / 磁盘 / 外部站点）→ 「重试」；`backup` 连续失败要立刻手工备份一次（§6） |
+| `disk_high` | `/admin/storage` 看占用与孤儿 → 清孤儿、删不再需要的原图（保变体）；仍不够就扩容或迁移 `/data/blog` |
+| `cert_expiring` | `sudo certbot renew`，再 `systemctl status certbot.timer`；证书换新后告警状态自动清零 |
+
+**应用自己挂了发不出告警**，所以宿主侧建议再有一层外部探活（可选，但强烈建议）：
+
+```bash
+# /etc/cron.d/blog-watch：每 5 分钟看一次 readyz，失败就往同一个 webhook 打一条
+*/5 * * * * root curl -fsS -m 5 http://127.0.0.1:8641/readyz >/dev/null || \
+  curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+  -d '{"event":"site_down","message":"readyz 不可达"}' https://example.com/hook
+```
+
+---
+
+## 21. 空机恢复演练（D17 / G8，每季度一次）
+
+目标：拿**备份产物**在一台干净机器上把站点恢复起来，并证明数据完整（不是只证明容器能启动）。
+建议在预发/临时机器上做，**不要**在线上原地演练。
+
+### 21.1 演练前的准备（线上）
+
+```bash
+# 1) 手动投递一次备份（或等 03:00 的周期任务），确认产物齐全
+curl -s -X POST http://127.0.0.1:8641/api/admin/jobs -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{"type":"backup"}'
+sudo ls -lh /data/blog/backup/            # blog-YYYYMMDD.db + uploads-YYYYMMDD/ + files-YYYYMMDD/
+
+# 2) 完整性检查（等价于每周的 integrity_check 任务）
+curl -s -X POST http://127.0.0.1:8641/api/admin/jobs -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" -d '{"type":"integrity_check"}'
+sqlite3 /data/blog/backup/blog-YYYYMMDD.db 'PRAGMA integrity_check;'   # ok
+
+# 3) 把备份搬到演练机（rsync 保留硬链接关系：-H 让快照目录不膨胀）
+sudo rsync -aH --info=progress2 /data/blog/backup/ backup-host:/srv/restore/backup/
+```
+
+> 备份目录里的 `uploads-*/`、`files-*/` 是**硬链接快照**，和线上共享 inode。用 `rsync -aH`
+> 或 `tar --hard-dereference=false` 搬运；用普通 `cp`/网盘同步会把 90 天的快照膨胀成 N 倍体积。
+
+### 21.2 在干净机器上恢复
+
+```bash
+# 1) 与线上一致的主机准备（§19 第 1 步）、代码、.env（管理端口令可先留空）
+sudo mkdir -p /data/blog/{db,uploads,files,backup}
+sudo chown -R 1000:1000 /data/blog
+
+# 2) 还原数据库（恢复的是单文件快照，先清掉 WAL/SHM）
+sudo cp -a /srv/restore/backup/blog-YYYYMMDD.db /data/blog/db/blog.db
+sudo rm -f /data/blog/db/blog.db-wal /data/blog/db/blog.db-shm
+sqlite3 /data/blog/db/blog.db 'PRAGMA integrity_check;'          # ok
+sqlite3 /data/blog/db/blog.db 'SELECT count(*) FROM posts;'      # 记下这个数
+
+# 3) 还原图片与附件（硬链接快照直接搬，注意用 -a 保权限）
+sudo cp -a /srv/restore/backup/uploads-YYYYMMDD/. /data/blog/uploads/
+sudo cp -a /srv/restore/backup/files-YYYYMMDD/.   /data/blog/files/
+sudo chown -R 1000:1000 /data/blog
+sudo setfacl -R  -m u:www-data:rX /data/blog/uploads
+sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
+
+# 4) 起容器（先不要接公网 nginx）
+cd /srv/blog/deploy && docker compose up -d --build
+curl -s http://127.0.0.1:8641/readyz | jq
+```
+
+### 21.3 恢复成功的判据（逐条勾）
+
+| # | 判据 | 命令 / 位置 |
+| --- | --- | --- |
+| 1 | 迁移没有报 `dirty`，进程正常起 | `docker compose logs blog \| grep -i '迁移\|dirty'` |
+| 2 | `readyz` 四项全 true | `curl -s 127.0.0.1:8641/readyz` |
+| 3 | 文章数与线上一致 | `/admin/posts` 的 total，或 `SELECT count(*) FROM posts;` |
+| 4 | **磁盘与库对得上**：缺失清单为空 | `/admin/storage` → "缺失文件" 0 条 |
+| 5 | 图片能打开 | `/admin/media` 任取一张 → 复制 URL → 经隧道 `http://localhost:8641/uploads/…` 200 |
+| 6 | 附件能下载 | `/admin/attachments` → 点下载 → `Content-Disposition: attachment` |
+| 7 | 评论/统计还在 | `/admin/comments`、`/admin/stats` 有历史数据 |
+| 8 | 公开端可读 | 临时 `curl -H 'Host: blog.zjut.si' http://127.0.0.1:8640/` 返回首页 HTML |
+| 9 | `integrity_check` 任务通过 | `/admin/jobs` 手动投递后状态 `done` |
+| 10 | 演练机上的 `backup` 任务能跑出新产品 | `/admin/jobs` 投递 `backup` → `done` |
+
+演练完成后销毁演练机，并把结论（耗时、卡点、改进项）记到本节末尾：
+
+```
+2026-__-__ 演练人：__  耗时：__ 分钟  卡点：__  改进：__
+```
+
 

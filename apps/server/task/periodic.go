@@ -24,6 +24,8 @@ type periodicSpec struct {
 var periodicSpecs = []periodicSpec{
 	{jobType: model.JobTypeBackup, hour: 3, minute: 0, weekday: -1},
 	{jobType: model.JobTypeCleanup, hour: 4, minute: 0, weekday: -1},
+	// integrity_check 排在 cleanup 之后、link_check 之前：先让当天的清理落定再校验库。
+	{jobType: model.JobTypeIntegrityCheck, hour: 4, minute: 30, weekday: time.Monday},
 	{jobType: model.JobTypeLinkCheck, hour: 5, minute: 0, weekday: time.Monday},
 }
 

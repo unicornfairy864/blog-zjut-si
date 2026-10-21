@@ -36,8 +36,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nodynamic -trimpath -ld
 FROM node:24-bookworm-slim AS runtime
 
 # slim 镜像不带 xz-utils，`tar -J` 会报 "xz: Cannot exec"；解包 s6-overlay 前必须先装。
+# procps 提供 pkill/pgrep：自愈演练要能在容器里 `pkill -9 blogd`（runbook §19 第 8 步）。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tzdata xz-utils \
+    && apt-get install -y --no-install-recommends ca-certificates curl tzdata xz-utils procps \
     && rm -rf /var/lib/apt/lists/*
 
 ARG S6_OVERLAY_VERSION=3.2.1.0

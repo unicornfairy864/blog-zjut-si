@@ -419,9 +419,10 @@ PV 打点。请求体：
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/admin/jobs?status=&page=&pageSize=` | 任务队列分页，按 `run_at` 倒序；`status` 空表示全部 |
-| `POST /api/admin/jobs` | 手动投递：`{"type":"cleanup"}`，只接受 `cleanup` / `backup` / `link_check`，立即入队 |
+| `POST /api/admin/jobs` | 手动投递：`{"type":"cleanup"}`，只接受 `cleanup` / `backup` / `link_check` / `integrity_check`，立即入队 |
 | `POST /api/admin/jobs/{id}/retry` | 把 `failed` 任务放回 `pending` 并立刻到期；非 `failed` → `200 + code 1004` |
 | `GET /api/admin/audit-logs?action=&targetType=&targetId=&page=&pageSize=` | 审计日志分页，按创建时间倒序；`adminId` / `ipHash` 只在这里出现 |
+| `POST /api/admin/notify/test` | 按**已保存**的告警配置立刻投递一条测试告警；不看 `enabled`、不受 24h 静默期影响。通道没配齐 → `200 + code 1003`；投递失败 → `200 + code 1006`（`msg` 只说"超时 / HTTP 4xx / 连不上"，细节在容器日志）。成功写审计 `notify.test` |
 
 ```json
 // GET /api/admin/jobs  →  data.list[]
@@ -526,8 +527,8 @@ PV 打点。请求体：
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /api/admin/settings` | 当前可写项 + 只读回显（**不含任何口令**） |
-| `PUT /api/admin/settings` | `{"imgBaseUrl":"","siteTimezone":"Asia/Shanghai"}`；写成功会 `content_version+1` |
+| `GET /api/admin/settings` | 当前可写项 + 只读回显（**不含任何口令与告警密钥**） |
+| `PUT /api/admin/settings` | `{"imgBaseUrl":"","siteTimezone":"Asia/Shanghai","notify":{…}}`；写内容类字段会 `content_version+1`，**只改 `notify` 不会** |
 
 ```json
 // GET /api/admin/settings  →  data
@@ -536,13 +537,31 @@ PV 打点。请求体：
   "upload": { "dir": "/data/blog/uploads", "maxBytes": 31457280 },
   "file": { "dir": "/data/blog/files", "maxBytes": 20971520 },
   "task": { "enabled": true, "intervalSeconds": 60 },
-  "db": { "path": "/data/blog/db/blog.db" }
+  "db": { "path": "/data/blog/db/blog.db" },
+  "notify": {
+    "enabled": true, "channel": "webhook",
+    "webhookUrlSet": true, "telegramBotTokenSet": false, "telegramChatId": "",
+    "events": { "jobFailed": true, "diskHigh": true, "certExpiring": true },
+    "diskThresholdPercent": 85, "certExpireDays": 14,
+    "certFile": "/etc/letsencrypt/live/blog.zjut.si/fullchain.pem",
+    "lastAlerts": [ { "event": "job_failed", "at": 1760000000, "ok": true } ]
+  }
 }
+```
+
+```json
+// PUT /api/admin/settings  →  只提交要改的项
+{ "notify": { "enabled": true, "channel": "webhook",
+              "webhookUrl": "https://example.com/hook",
+              "diskThresholdPercent": 85, "certExpireDays": 14,
+              "events": { "jobFailed": true, "diskHigh": true, "certExpiring": true } } }
 ```
 
 - `siteTimezone` 必须是 `time.LoadLocation` 认得的 IANA 名（如 `Asia/Shanghai`），否则 `200 + code 1003`。
 - `imgBaseUrl` 留空表示用相对路径 `/uploads/…`（由 nginx 直出）；填了必须是 `http(s)://` 且不带结尾斜杠。
-- `visitor_salt` 属于内部密钥，**任何接口都不返回**（§9）。
+- `notify` 的密钥（`webhookUrl`、`telegramBotToken`）**从不回显**：`null` = 保持不变，`""` = 清空，非空 = 覆盖；
+  字段级错误（渠道非法、启用却没填必填项、阈值越界）→ `200 + code 1003`，`data` 是 `[{field,message}]`。
+- `visitor_salt` 与告警密钥属于内部密钥，**任何接口都不返回**（§9）。
 
 ### 媒体
 
@@ -662,5 +681,5 @@ PV 打点。请求体：
 
 ## 尚未实现（后续模块）
 
-`/attachments/*`、`/preview/{token}`、`/jobs*`、`/audit-logs`、`/settings`、`/tags*`、`/series*`、
-`/links`、`/pages/*`、`/redirects*` 的管理端写接口、`POST /api/internal/revalidate`。
+管理端静态页写接口 `GET|PUT /api/admin/pages/{slug}`，以及 `POST /api/internal/revalidate`（Next 主动失效）。
+两者在 §5 的接口清单里出现过，但路由未注册，**别当契约用**（agent.md §5 有同样的标注）。
