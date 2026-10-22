@@ -4,8 +4,12 @@
 export const SITE = {
   name: "zjut.si",
   title: "zjut.si",
-  description: "浙江工业大学 SI 方向的技术随记：后端、基础设施与工程实践。",
+  description: "陈松的个人博客：Web、算法竞赛、嵌入式开发",
   author: "unicornfairy864",
   url: "https://blog.zjut.si",
   locale: "zh-CN",
+  /** 个人主页：导航栏头像指向这里（本站是 blog.zjut.si）。 */
+  homeUrl: "https://www.zjut.si",
+  /** 导航栏品牌文字：指向本站首页，与 SITE.name 分开是因为它要大写成域名形态。 */
+  navLabel: "BLOG.ZJUT.SI",
 } as const;

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { isApiCode, publicApi, type Paged, type PublicPostListItem } from "@/lib/api/public";
+import { Divider } from "@/ui/layout/divider";
 import { Pagination } from "@/ui/shared/pagination";
 import { PostCard } from "@/ui/post/post-card";
 
@@ -88,6 +89,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           </button>
         </form>
       </header>
+      <Divider />
 
       {tooLong ? (
         <p className="text-sm text-muted-foreground">

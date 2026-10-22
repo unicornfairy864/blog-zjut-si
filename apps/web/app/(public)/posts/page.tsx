@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { publicApi } from "@/lib/api/public";
 import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
+import { Divider } from "@/ui/layout/divider";
 import { Pagination } from "@/ui/shared/pagination";
 import { PostCard } from "@/ui/post/post-card";
 
@@ -61,6 +62,9 @@ export default async function PostListPage({
         <h1 className="text-2xl font-semibold tracking-tight">全部文章</h1>
         <p className="text-xs text-muted-foreground">共 {paged.total} 篇</p>
       </header>
+
+      {/* 标题区与列表之间一条分割线（§8）。 */}
+      <Divider />
 
       <section className="space-y-8">
         {paged.list.length === 0 ? (

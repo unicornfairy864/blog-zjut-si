@@ -6,6 +6,7 @@ import { isApiCode, publicApi, type PageDetail } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
 import { absoluteUrl, buildOpenGraph, excerptFromHtml } from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
+import { Divider } from "@/ui/layout/divider";
 import { PostContent } from "@/ui/post/post-content";
 
 export const dynamic = "force-dynamic";
@@ -68,11 +69,17 @@ export default async function StaticPage({ params }: StaticPageProps) {
 
   return (
     <article className="mx-auto w-full max-w-3xl space-y-6">
-      <h1 className="break-words text-3xl font-semibold leading-tight tracking-tight">
-        {page.title}
-      </h1>
+      {/* 原来 h1 直接裸放在 article 里，补一层 <header> 才能让分割线挂在标题区之后。 */}
+      <header>
+        <h1 className="break-words text-3xl font-semibold leading-tight tracking-tight">
+          {page.title}
+        </h1>
+      </header>
+      <Divider />
       <PostContent html={page.contentHtml} />
-      <p className="border-t border-border pt-4 text-xs text-muted-foreground">
+      {/* 正文下方一条分割线（§8）；下面这行「最后更新」自己不再画上边框，避免两条线并排。 */}
+      <Divider />
+      <p className="text-xs text-muted-foreground">
         最后更新 {formatDate(page.updatedAt)}
       </p>
     </article>

@@ -709,12 +709,6 @@ export function PostEditor({ postId }: { postId: number | null }) {
         </Alert>
       ) : null}
 
-      {/*
-        发布控制（D13）：定时发布 / 版本回滚 / 预览链接。
-        post 为 null 时组件自己只显示"先保存草稿"，所以这里不用额外判断。
-      */}
-      <PostPublishing post={post} onSaved={applySaved} disabled={busy} />
-
       <form
         className="space-y-5"
         noValidate
@@ -1071,6 +1065,13 @@ export function PostEditor({ postId }: { postId: number | null }) {
             </div>
           </div>
         </details>
+
+        {/*
+          发布控制（D13）：定时发布 / 版本回滚 / 预览链接。
+          放在「分类与展示」下面：这些是发布前后的收尾动作，跟着文章元信息走。
+          post 为 null 时组件自己只显示"先保存草稿"，所以这里不用额外判断。
+        */}
+        <PostPublishing post={post} onSaved={applySaved} disabled={busy} />
 
         <details className="rounded-lg border border-border p-4">
           <summary className="cursor-pointer text-sm font-medium">

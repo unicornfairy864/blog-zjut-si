@@ -5,6 +5,7 @@ import { isApiCode } from "@/lib/api/public";
 import { publicPreviewApi, type PreviewPost } from "@/lib/api/preview";
 import { formatDateTime } from "@/lib/utils";
 import { PostStatusBadge } from "@/ui/admin/post-status-badge";
+import { Divider } from "@/ui/layout/divider";
 import { PostContent } from "@/ui/post/post-content";
 import { Alert, AlertDescription, AlertTitle } from "@/ui/shadcn/alert";
 
@@ -117,8 +118,10 @@ export default async function PreviewPage({ params }: PreviewPageProps) {
             </p>
           ) : null}
         </header>
+        <Divider />
 
         <PostContent html={post.contentHtml} />
+        <Divider />
       </article>
     </main>
   );

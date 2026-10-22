@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { publicApi } from "@/lib/api/public";
 import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
+import { Divider } from "@/ui/layout/divider";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,7 @@ export default async function TagsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">标签</h1>
         <p className="text-xs text-muted-foreground">共 {list.length} 个</p>
       </header>
+      <Divider />
 
       {list.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">

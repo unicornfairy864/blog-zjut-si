@@ -4,6 +4,7 @@ import Link from "next/link";
 import { publicApi } from "@/lib/api/public";
 import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
+import { Divider } from "@/ui/layout/divider";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ export default async function ArchivePage() {
           共 {archive.total} 篇
         </p>
       </header>
+      <Divider />
 
       {archive.years.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">

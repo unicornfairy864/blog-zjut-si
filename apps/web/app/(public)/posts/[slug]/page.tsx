@@ -13,6 +13,7 @@ import {
   excerptFromHtml,
 } from "@/lib/seo";
 import { formatDate } from "@/lib/utils";
+import { Divider } from "@/ui/layout/divider";
 import { CommentSection } from "@/ui/post/comment-section";
 import { PostCard } from "@/ui/post/post-card";
 import { PostContent } from "@/ui/post/post-content";
@@ -152,6 +153,9 @@ export default async function PostDetailPage({
             ) : null}
           </header>
 
+          {/* 标题区下方一条分割线（§8）。 */}
+          <Divider />
+
           {post.cover ? (
             <figure className="space-y-2">
               <PostImage media={post.cover} priority />
@@ -181,10 +185,13 @@ export default async function PostDetailPage({
 
           <PostContent html={post.contentHtml} />
 
+          {/* 正文下方一条分割线（§8）；上下篇导航自己不再画上边框，避免两条线叠在一起。 */}
+          <Divider />
+
           {post.prev || post.next ? (
             <nav
               aria-label="上下篇"
-              className="flex flex-col gap-3 border-t border-border pt-6 text-sm sm:flex-row sm:justify-between"
+              className="flex flex-col gap-3 text-sm sm:flex-row sm:justify-between"
             >
               {post.prev ? (
                 <Link

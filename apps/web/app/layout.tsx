@@ -31,7 +31,19 @@ export const metadata: Metadata = {
   }),
   twitter: { card: "summary_large_image" },
   // 不使用 next/font/google：字体自托管，构建期不依赖外网（agent.md §12）。
-  icons: { icon: "/favicon.ico" },
+  // 品牌图标与个人主页（www.zjut.si）同源，素材放在 public/ 下。
+  //
+  // 注意 favicon.ico **不能**放 `app/`：Next 会把它当图片资源处理，而这份 ico 里嵌的
+  // PNG 不是 RGBA，`next build` 会直接报 "Processing image failed / The PNG is not in
+  // RGBA format" 而失败。放 public/ 就是静态直出，浏览器照样认。
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/brand/favicon-32.png", type: "image/png", sizes: "32x32" },
+      { url: "/brand/icon-192.png", type: "image/png", sizes: "192x192" },
+    ],
+    apple: [{ url: "/brand/apple-touch-icon.png" }],
+  },
 };
 
 export const viewport: Viewport = {

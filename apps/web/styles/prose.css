@@ -13,6 +13,17 @@
   @apply mt-5;
 }
 
+/*
+ * 正文里的 h1（作者写 `# 标题`）。
+ *
+ * Tailwind preflight 把 h1–h6 重置成 `font-size: inherit; font-weight: inherit`，
+ * 所以不给样式的话，正文 h1 看起来和普通段落一模一样（h2/h3 有样式，唯独 h1 漏了）。
+ * 字号比 h2 大一档，正文内部的层级才立得住。
+ */
+.prose-blog h1 {
+  @apply mt-10 scroll-mt-24 text-3xl font-semibold;
+}
+
 .prose-blog h2 {
   @apply mt-10 scroll-mt-24 text-2xl font-semibold;
 }

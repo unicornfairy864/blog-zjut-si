@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { isApiCode, publicApi } from "@/lib/api/public";
 import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
+import { Divider } from "@/ui/layout/divider";
 import { Pagination } from "@/ui/shared/pagination";
 import { PostCard } from "@/ui/post/post-card";
 
@@ -92,6 +93,7 @@ export default async function TagDetailPage({
           </Link>
         </p>
       </header>
+      <Divider />
 
       <section className="space-y-8">
         {result.list.length === 0 ? (

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { publicApi } from "@/lib/api/public";
 import { absoluteUrl, buildOpenGraph } from "@/lib/seo";
+import { Divider } from "@/ui/layout/divider";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,7 @@ export default async function LinksPage() {
         <h1 className="text-2xl font-semibold tracking-tight">友链</h1>
         <p className="text-xs text-muted-foreground">共 {list.length} 条</p>
       </header>
+      <Divider />
 
       {list.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">

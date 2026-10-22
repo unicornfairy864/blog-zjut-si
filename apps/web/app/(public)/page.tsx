@@ -4,6 +4,7 @@ import Link from "next/link";
 import { publicApi } from "@/lib/api/public";
 import { SITE } from "@/lib/constants/site";
 import { buildOpenGraph, buildWebsiteJsonLd } from "@/lib/seo";
+import { Divider } from "@/ui/layout/divider";
 import { PostCard } from "@/ui/post/post-card";
 import { JsonLd } from "@/ui/seo/json-ld";
 
@@ -49,6 +50,9 @@ export default async function HomePage() {
           {site.counts.series} 个 · 友链 {site.counts.links} 条
         </p>
       </section>
+
+      {/* 简介区与文章列表之间一条分割线（§8：公开页标题区下方统一加线）。 */}
+      <Divider />
 
       <section className="space-y-8" aria-label="最新文章">
         {paged.list.length === 0 ? (
