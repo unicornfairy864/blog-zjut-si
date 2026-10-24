@@ -22,11 +22,10 @@ export function SiteHeader() {
           {/*
             头像指向个人主页（www.zjut.si），文字指向本站首页：两个目标不同，
             所以是两个并列的链接，而不是一个大链接里套小链接。
+            头像用同标签跳转（不加 target="_blank"）：它是导航的一部分，不是外链引用。
           */}
           <a
             href={SITE.homeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
             aria-label={`个人主页 ${SITE.homeUrl}`}
             className="shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
