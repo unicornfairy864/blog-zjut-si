@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/api/fetcher";
 import { publicApi, type LikeState, type PostStats } from "@/lib/api/public";
 import { swrKeys } from "@/lib/swr/keys";
 import { Button } from "@/ui/shadcn/button";
+import { Loading } from "@/ui/shared/loading";
 
 export interface PostInteractionsProps {
   slug: string;
@@ -80,11 +81,16 @@ export function PostInteractions({ slug }: PostInteractionsProps) {
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
-      <p className="flex items-center gap-x-3" aria-live="polite">
-        <span>阅读 {viewCount}</span>
-        <span aria-hidden="true">·</span>
-        <span>点赞 {likeCount}</span>
-      </p>
+      {data || error ? (
+        <p className="flex items-center gap-x-3" aria-live="polite">
+          <span>阅读 {viewCount}</span>
+          <span aria-hidden="true">·</span>
+          <span>点赞 {likeCount}</span>
+        </p>
+      ) : (
+        // 还没拿到计数时给个明确的"在取"，而不是先摆两个「—」让人以为没有数据。
+        <Loading compact label="统计加载中…" />
+      )}
 
       <Button
         type="button"

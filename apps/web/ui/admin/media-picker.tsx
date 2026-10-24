@@ -7,6 +7,7 @@ import type { ApiError } from "@/lib/api/fetcher";
 import { adminMediaApi, type MediaItem, type MediaListResult } from "@/lib/api/media";
 import { swrKeys } from "@/lib/swr/keys";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
+import { Loading } from "@/ui/shared/loading";
 
 export interface MediaPickerProps {
   /** 点中一张图后拿到完整条目：插正文用 `item.url`，选封面/OG 用 `item.id`。 */
@@ -37,7 +38,7 @@ export function MediaPicker({ onPick, pageSize = 12, selectedId = null }: MediaP
   }
 
   if (isLoading) {
-    return <p className="text-xs text-muted-foreground">正在加载媒体库…</p>;
+    return <Loading compact label="正在加载媒体库…" />;
   }
 
   if (!data || data.list.length === 0) {

@@ -800,9 +800,7 @@ export function PostEditor({ postId }: { postId: number | null }) {
               disabled={uploadingImages}
             />
             {uploadingImages ? (
-              <p aria-live="polite" className="text-xs text-muted-foreground">
-                图片上传并转码中…（转码完成后才会插入正文）
-              </p>
+              <Loading compact label="图片上传并转码中…（转码完成后才会插入正文）" />
             ) : null}
             {uploadError ? (
               <Alert variant="destructive">
@@ -872,11 +870,13 @@ export function PostEditor({ postId }: { postId: number | null }) {
               <header className="mb-4 flex items-center justify-between border-b border-border pb-3">
                 <h2 className="text-sm font-medium">发布预览</h2>
                 <span className="text-xs text-muted-foreground">
-                  {previewLoading
-                    ? "生成中…"
-                    : preview
-                      ? `${preview.wordCount} 字 · 约 ${preview.readingTime} 分钟`
-                      : "输入正文后自动生成"}
+                  {previewLoading ? (
+                    <Loading compact label="生成中…" />
+                  ) : preview ? (
+                    `${preview.wordCount} 字 · 约 ${preview.readingTime} 分钟`
+                  ) : (
+                    "输入正文后自动生成"
+                  )}
                 </span>
               </header>
               {previewError ? (

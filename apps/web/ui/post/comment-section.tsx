@@ -13,6 +13,7 @@ import { Alert, AlertDescription } from "@/ui/shadcn/alert";
 import { Button } from "@/ui/shadcn/button";
 import { Input } from "@/ui/shadcn/input";
 import { Textarea } from "@/ui/shadcn/textarea";
+import { Spinner } from "@/ui/shared/loading";
 
 /** 与服务端一致的字段上限（agent.md §5）。 */
 const NAME_MAX = 50;
@@ -146,7 +147,16 @@ function CommentForm({ slug, parentId, onCancel }: CommentFormProps) {
 
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={submitting}>
-          {submitting ? "提交中…" : parentId ? "回复" : "发表评论"}
+          {submitting ? (
+            <>
+              <Spinner className="mr-1.5 h-3.5 w-3.5" />
+              提交中…
+            </>
+          ) : parentId ? (
+            "回复"
+          ) : (
+            "发表评论"
+          )}
         </Button>
         {onCancel ? (
           <Button

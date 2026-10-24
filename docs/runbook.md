@@ -1122,6 +1122,7 @@ E2E_BASE_URL=https://blog.zjut.si pnpm test:e2e      # 直接审计线上
 | 正文对比度 | AA（正文 4.5 / 大字号 3.0） | §8 |
 | 375px 无横向滚动 | `scrollWidth <= innerWidth` | §16 G4 |
 | 键盘焦点可见 | `focus-visible` 有非 `none` 轮廓 | §8 |
+| 导航时有等待反馈 | 按住 RSC 请求后骨架屏（`role="status"`）出现，随后被真实内容替换 | §8 |
 | 文章页 TTFB | < 300ms | §15 / G8 |
 | LCP | < 2.5s | §15 / G8 |
 | 文章页首屏 JS | < 150KB gzip（不含公式） | §15 / G8 |

@@ -32,7 +32,7 @@ import {
 } from "@/ui/shadcn/card";
 import { Input } from "@/ui/shadcn/input";
 import { Label } from "@/ui/shadcn/label";
-import { Loading } from "@/ui/shared/loading";
+import { Loading, Spinner } from "@/ui/shared/loading";
 
 /** 同一时刻只允许一个动作在跑；写操作都有副作用，重复点击没有意义。 */
 type PublishingAction =
@@ -441,11 +441,16 @@ export function PostPublishing({
               disabled={busy}
             >
               <Link2 className="h-4 w-4" aria-hidden="true" />
-              {action === "link"
-                ? "生成中…"
-                : previewLink
-                  ? "重新生成"
-                  : "生成预览链接"}
+              {action === "link" ? (
+                <>
+                  <Spinner className="h-4 w-4" />
+                  生成中…
+                </>
+              ) : previewLink ? (
+                "重新生成"
+              ) : (
+                "生成预览链接"
+              )}
             </Button>
             {previewLink ? (
               <span className="text-xs text-muted-foreground">
