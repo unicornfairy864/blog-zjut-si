@@ -66,12 +66,17 @@ export function MediaPicker({ onPick, pageSize = 12, selectedId = null }: MediaP
       <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
         {ready.map((item) => {
           const name = item.alt || item.originalName || "图片";
+          // 既没有 alt 也没有原文件名时，退到 id，避免出现"选择 图片"这种零信息量的可访问名。
+          const label =
+            item.alt || item.originalName
+              ? `选择 ${name}`
+              : `选择图片 #${item.id}`;
           const selected = item.id === selectedId;
           return (
             <li key={item.id}>
               <button
                 type="button"
-                aria-label={`选择 ${name}`}
+                aria-label={label}
                 aria-pressed={selected}
                 className={
                   selected

@@ -70,7 +70,7 @@ export function PostImage({
         sizes={srcSet ? sizes : undefined}
         width={media.width || undefined}
         height={media.height || undefined}
-        alt={media.alt || ""}
+        alt={media.alt || media.originalName || ""}
         loading={priority ? "eager" : "lazy"}
         decoding={priority ? "sync" : "async"}
         fetchPriority={priority ? "high" : "auto"}

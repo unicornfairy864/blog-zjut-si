@@ -9,7 +9,8 @@
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
     --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
+    /* 47% 落在 bg-muted 上只有 4.33，达不到 AA 的 4.5；45% 是 4.66（白底上是 5.05）。 */
+    --muted-foreground: 215 16% 45%;
     --primary: 222 47% 11%;
     --primary-foreground: 210 40% 98%;
     --destructive: 0 72% 51%;

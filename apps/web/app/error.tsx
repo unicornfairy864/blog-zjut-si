@@ -23,7 +23,14 @@ export default function GlobalError({
     <main className="container flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
       <h1 className="text-2xl font-semibold">页面出了点问题</h1>
       <p className="text-sm text-muted-foreground">
-        请稍后重试；如果持续出现，请查看服务端日志中的请求 id。
+        请稍后重试；如果持续出现，请把下面的请求 id 提供给站点管理员。
+      </p>
+      {/* digest 是服务端日志里的定位线索；为空时给出兜底，避免页面显示成半句话。 */}
+      <p className="text-xs text-muted-foreground">
+        请求 id：
+        <code className="font-mono">
+          {error.digest || "（本次请求没有生成 id）"}
+        </code>
       </p>
       <Button onClick={reset}>重试</Button>
     </main>

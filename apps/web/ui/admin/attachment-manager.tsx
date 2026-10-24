@@ -668,7 +668,7 @@ export function AttachmentManager() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">附件</h1>
         <p className="text-sm text-muted-foreground">
-          {`共 ${total} 个；本地上传的附件由本站直接下发，外链附件 302 跳转，两种都经 /api/attachments/{id}/go 计一次点击。`}
+          {`共 ${total} 条；本地上传的附件由本站直接下发，外链附件 302 跳转，两种都经 /api/attachments/{id}/go 计一次点击。`}
         </p>
       </header>
 

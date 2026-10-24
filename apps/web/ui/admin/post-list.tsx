@@ -59,7 +59,7 @@ export function PostList() {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">文章</h1>
           <p className="text-sm text-muted-foreground">
-            共 {total} 篇；草稿不会出现在公开站。
+            共 {total} 篇；草稿不会出现在公开页面。
           </p>
         </div>
         <Button asChild>

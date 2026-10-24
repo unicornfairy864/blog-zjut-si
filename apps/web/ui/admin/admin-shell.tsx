@@ -78,7 +78,7 @@ export function AdminShell({
         {/* 导航项变多后必须允许换行，否则窄屏会把右侧的登出按钮挤出可视区。 */}
         <div className="container flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 py-2">
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <span className="text-sm font-semibold">zjut.si 管理台</span>
+            <span className="text-sm font-semibold">zjut.si 管理端</span>
             <nav aria-label="管理导航" className="flex flex-wrap items-center gap-1">
               {NAV_ITEMS.map((item) => {
                 const active =

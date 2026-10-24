@@ -53,7 +53,7 @@ const TYPE_LABEL: Record<string, string> = {
   link_check: "检查外链",
   integrity_check: "校验数据库",
   publish_scheduled: "定时发布",
-  media_process: "媒体处理",
+  media_process: "媒体转码",
   media_archive: "媒体归档",
 };
 

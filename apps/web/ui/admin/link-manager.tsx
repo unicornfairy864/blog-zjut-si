@@ -27,7 +27,7 @@ import { Loading } from "@/ui/shared/loading";
 
 /** 状态中文名；公开端只出 active。 */
 const STATUS_LABELS: Record<LinkStatus, string> = {
-  active: "公开显示",
+  active: "公开",
   hidden: "隐藏",
 };
 
@@ -132,7 +132,7 @@ export function LinkManager() {
       <header className="space-y-2">
         <h1 className="text-xl font-semibold">友链</h1>
         <p className="text-sm text-muted-foreground">
-          这里能看到全部友链；公开页只显示「公开显示」的条目，「隐藏」仅用于临时下架。
+          这里能看到全部友链；公开页面只显示「公开」的条目，「隐藏」仅用于临时下架。
         </p>
       </header>
 

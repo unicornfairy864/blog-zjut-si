@@ -30,11 +30,11 @@ export interface CommentSectionProps {
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
     if (caught.code === 1005) {
-      return "评论太频繁了，请 10 分钟后再试。";
+      return "评论太频繁了，请 10 分钟后再试";
     }
     return caught.message;
   }
-  return "提交失败，请稍后重试。";
+  return "提交失败，请稍后重试";
 }
 
 interface CommentFormProps {
@@ -59,11 +59,11 @@ function CommentForm({ slug, parentId, onCancel }: CommentFormProps) {
     setError(null);
 
     if (!authorName.trim()) {
-      setError("请填写昵称。");
+      setError("请填写昵称");
       return;
     }
     if (!contentMd.trim()) {
-      setError("请填写评论内容。");
+      setError("请填写评论内容");
       return;
     }
 

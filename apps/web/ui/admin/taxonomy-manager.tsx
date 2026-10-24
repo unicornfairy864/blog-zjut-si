@@ -255,7 +255,7 @@ export function TaxonomyManager({ kind }: TaxonomyManagerProps) {
                       {item.slug}
                     </code>
                     <span className="text-xs text-muted-foreground tabular-nums">
-                      {item.count} 篇文章
+                      {item.count} 篇
                     </span>
                     <time className="text-xs text-muted-foreground">
                       {formatDateTime(item.createdAt)}

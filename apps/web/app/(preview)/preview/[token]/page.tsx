@@ -59,7 +59,7 @@ function PreviewMeta({ post }: { post: PreviewPost }) {
       {post.publishedAt ? (
         <span>发布于 {formatDateTime(post.publishedAt)}</span>
       ) : null}
-      <span>链接过期：{formatDateTime(post.expiresAt)}</span>
+      <span>链接过期于 {formatDateTime(post.expiresAt)}</span>
     </p>
   );
 }

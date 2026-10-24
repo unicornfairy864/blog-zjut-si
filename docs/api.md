@@ -39,7 +39,8 @@
         "coverMediaId": null, "publishedAt": 1760000000, "updatedAt": 1760000000,
         "wordCount": 1024, "readingTime": 4, "isPinned": false,
         "cover": {
-          "sha256": "786a8d…", "ext": "jpg", "width": 2400, "height": 1200,
+          "sha256": "786a8d…", "ext": "jpg", "originalName": "photo.jpg",
+          "width": 2400, "height": 1200,
           "alt": "示例图", "blurhash": "L6Pj0^…",
           "url": "/uploads/78/786a8d…/1600.webp",
           "origUrl": "/uploads/78/786a8d…/original.jpg",

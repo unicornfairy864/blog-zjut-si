@@ -94,7 +94,6 @@ export function PostInteractions({ slug }: PostInteractionsProps) {
         // 计数没到手就不知道当前是赞还是取消，先禁用，避免点了没反应。
         disabled={pending || !data}
         aria-pressed={liked}
-        aria-label="点赞"
       >
         {liked ? `已赞 ${likeCount}` : `点赞 ${likeCount}`}
       </Button>

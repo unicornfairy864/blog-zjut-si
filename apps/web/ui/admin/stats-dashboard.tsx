@@ -100,7 +100,7 @@ function buildCountCards(data: AdminStatsOverview): CountCard[] {
         { label: "已发布", value: data.posts.published },
         { label: "草稿", value: data.posts.draft },
         { label: "定时", value: data.posts.scheduled },
-        { label: "归档", value: data.posts.archived },
+        { label: "已归档", value: data.posts.archived },
         { label: "回收站", value: data.posts.deleted },
       ],
     },
@@ -116,7 +116,7 @@ function buildCountCards(data: AdminStatsOverview): CountCard[] {
       title: "媒体",
       rows: [
         { label: "就绪", value: data.media.ready },
-        { label: "处理中", value: data.media.processing },
+        { label: "转码中", value: data.media.processing },
         { label: "失败", value: data.media.failed },
       ],
     },
@@ -213,7 +213,7 @@ export function StatsDashboard() {
             <h2 className="text-base font-semibold">日粒度</h2>
             <p className="text-sm text-muted-foreground">
               {daily
-                ? `区间合计 PV ${daily.totalPv} · UV ${daily.totalUv}（${daily.from} ~ ${daily.to}）`
+                ? `区间合计 PV ${daily.totalPv} · UV ${daily.totalUv}（${daily.from} – ${daily.to}）`
                 : "正在加载日粒度…"}
             </p>
           </div>

@@ -638,7 +638,7 @@ func (s MediaService) Delete(id int64, actor PostActor) error {
 		return fmt.Errorf("查询媒体失败: %w", err)
 	}
 	if media.Status == model.MediaStatusProcessing {
-		return errs.New(errs.ErrorConflict, "图片正在处理中，请稍后再删除")
+		return errs.New(errs.ErrorConflict, "图片正在转码中，请稍后再删除")
 	}
 
 	refs, err := model.FindMediaRefs(global.DB, media.ID, media.StorageKey)
@@ -682,14 +682,14 @@ func (s MediaService) Retry(id int64, actor PostActor) (MediaItem, error) {
 		return MediaItem{}, fmt.Errorf("查询媒体失败: %w", err)
 	}
 	if media.Status == model.MediaStatusProcessing {
-		return MediaItem{}, errs.New(errs.ErrorConflict, "图片正在处理中，请稍候")
+		return MediaItem{}, errs.New(errs.ErrorConflict, "图片正在转码中，请稍后再试")
 	}
 
 	store := storage.Local{Root: global.Config.Upload.Dir}
 	if originalPath, pathErr := store.Path(media.StorageKey + "/original." + media.Ext); pathErr != nil {
 		return MediaItem{}, fmt.Errorf("生成原图路径失败: %w", pathErr)
 	} else if _, statErr := os.Stat(originalPath); statErr != nil {
-		return MediaItem{}, errs.New(errs.ErrorNotFound, "原图不存在，无法重新处理")
+		return MediaItem{}, errs.New(errs.ErrorNotFound, "原图不存在，无法重新转码")
 	}
 
 	now := dbtime.Now()

@@ -909,7 +909,7 @@ func validateCanonicalURL(value string) error {
 	}
 	if !isHTTPURL(value) || utf8.RuneCountInString(value) > postCanonicalURLMaxLen {
 		return errs.New(errs.ErrorValidation,
-			"canonicalUrl 必须以 http:// 或 https:// 开头，且不超过 500 个字符")
+			"Canonical URL 必须以 http:// 或 https:// 开头，且不超过 500 个字符")
 	}
 	return nil
 }

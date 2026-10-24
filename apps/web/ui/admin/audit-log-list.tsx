@@ -192,7 +192,7 @@ export function AuditLogList() {
       {data ? (
         data.list.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-12 text-center text-sm text-muted-foreground">
-            {filtered ? "没有符合筛选条件的记录。" : "还没有审计记录。"}
+            {filtered ? "没有符合筛选条件的记录。" : "还没有审计日志。"}
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-border">

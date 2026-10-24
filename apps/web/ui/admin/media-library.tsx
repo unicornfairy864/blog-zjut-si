@@ -20,6 +20,13 @@ import { Loading } from "@/ui/shared/loading";
 /** 每页图片数；与文章列表保持一致的翻页交互。 */
 const PAGE_SIZE = 24;
 
+/** 引用类型的中文名；服务端回的是 cover / og / content 这类原始值。 */
+const REF_KIND_LABELS: Record<string, string> = {
+  cover: "封面",
+  og: "OG 图",
+  content: "正文",
+};
+
 /** 把 2002 的引用清单压成一句人话。 */
 function describeRefs(details: unknown): string {
   if (!Array.isArray(details) || details.length === 0) {
@@ -28,7 +35,8 @@ function describeRefs(details: unknown): string {
   return details
     .map((entry) => {
       const ref = entry as { title?: string; kind?: string };
-      return `《${ref.title ?? "未命名"}》（${ref.kind ?? "引用"}）`;
+      const kind = ref.kind ?? "";
+      return `《${ref.title ?? "未命名"}》（${REF_KIND_LABELS[kind] ?? ref.kind ?? "引用"}）`;
     })
     .join("、");
 }
@@ -75,7 +83,7 @@ export function MediaLibrary() {
   }
 
   async function handleDelete(item: MediaItem) {
-    if (!window.confirm(`确定删除 ${item.originalName}？`)) {
+    if (!window.confirm(`确定删除「${item.originalName}」？`)) {
       return;
     }
     setError(null);
@@ -99,7 +107,7 @@ export function MediaLibrary() {
       await adminMediaApi.retry(item.id);
       await mutate();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "重新处理失败");
+      setError(caught instanceof ApiError ? caught.message : "重新转码失败");
     }
   }
 
@@ -110,7 +118,7 @@ export function MediaLibrary() {
    */
   async function handleRemoveOriginal(item: MediaItem) {
     const confirmed = window.confirm(
-      `确定删除 ${item.originalName} 的原图？\n四档变体会保留，但原图删掉后无法再重新转码。`,
+      `确定删除「${item.originalName}」的原图？\n四档变体会保留，但原图删掉后无法再重新转码。`,
     );
     if (!confirmed) {
       return;
@@ -142,7 +150,7 @@ export function MediaLibrary() {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">媒体库</h1>
           <p className="text-sm text-muted-foreground">
-            共 {total} 张；支持 JPEG / PNG / WebP / GIF，单张 ≤30MB、≤5000 万像素。
+            共 {total} 张；支持 JPEG / PNG / WebP / GIF，单张不超过 30MB、5000 万像素。
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -212,8 +220,8 @@ export function MediaLibrary() {
                     ) : (
                       <span className="px-3 text-center text-xs text-muted-foreground">
                         {item.status === "failed"
-                          ? `处理失败：${item.error || "未知原因"}`
-                          : "处理中…"}
+                          ? `转码失败：${item.error || "未知原因"}`
+                          : "转码中…"}
                       </span>
                     )}
                   </div>
@@ -289,7 +297,7 @@ export function MediaLibrary() {
                               : undefined
                           }
                         >
-                          重试
+                          重新转码
                         </Button>
                       ) : null}
                       <Button

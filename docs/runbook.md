@@ -1065,4 +1065,110 @@ curl -s http://127.0.0.1:8641/readyz | jq
 2026-__-__ 演练人：__  耗时：__ 分钟  卡点：__  改进：__
 ```
 
+---
+
+## 22. 性能与内存实测 / 可访问性审计（D19 / G8）
+
+### 22.1 被测栈怎么起（本机）
+
+两个进程都要在：Go 负责 API 与边缘，Next 负责页面。
+
+```bash
+# 1) Go（默认 :8640 公开 / :8641 管理），指向一个临时库
+cd apps/server
+BLOG_SERVER_PUBLIC=:8640 BLOG_SERVER_ADMIN=:8641 \
+BLOG_DB_PATH=/tmp/perf/blog.db BLOG_UPLOAD_DIR=/tmp/perf/uploads \
+BLOG_FILE_DIR=/tmp/perf/files BLOG_BACKUP_DIR=/tmp/perf/backup \
+BLOG_ADMIN_USERNAME=verify BLOG_ADMIN_PASSWORD=verify-password-0123456789 \
+go run .
+
+# 2) Next（生产模式；先在 apps/web 跑 NEXT_DISABLE_STANDALONE=1 pnpm build）
+cd apps/web && NEXT_DISABLE_STANDALONE=1 pnpm build && pnpm start
+```
+
+> `NEXT_DISABLE_STANDALONE=1` 只用于**本机**：standalone 产物需要的软链在 Windows 上会 EPERM。
+> Docker 与 CI 都在 Linux 上构建，默认始终输出 standalone，不要加这个变量。
+> 注意构建与启动要用**同一个**设置，否则 Next 会打印
+> `"next start" does not work with "output: standalone"`。
+
+灌一点数据（至少要有一篇已发布文章，性能与可访问性断言才有对象）：
+
+```bash
+CSRF=$(curl -s -c /tmp/c.txt -H 'Content-Type: application/json' \
+  -d '{"username":"verify","password":"verify-password-0123456789"}' \
+  http://127.0.0.1:8641/api/admin/auth/login >/dev/null && \
+  curl -s -b /tmp/c.txt http://127.0.0.1:8641/api/admin/auth/me | jq -r .data.csrfToken)
+curl -s -b /tmp/c.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"title":"性能验证","slug":"perf-verify","contentMd":"# 标题\n\n正文\n","excerpt":""}' \
+  http://127.0.0.1:8641/api/admin/posts | jq -r .data.id
+curl -s -b /tmp/c.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -d '{}' http://127.0.0.1:8641/api/admin/posts/1/publish | jq -r .code
+```
+
+### 22.2 可访问性与性能断言（playwright）
+
+```bash
+cd apps/web
+E2E_BASE_URL=http://127.0.0.1:8640 pnpm test:e2e     # 本机
+E2E_BASE_URL=https://blog.zjut.si pnpm test:e2e      # 直接审计线上
+```
+
+浏览器用系统已装的 Edge（`channel: "msedge"`），不需要 `playwright install`。断言：
+
+| 断言 | 阈值 | 契约 |
+| --- | --- | --- |
+| 页面骨架恰好一个 `h1`、标题不跳级 | — | §8 可访问性 |
+| 图片有 `alt`、链接/按钮有可访问名、控件有标签、有 `<main>` | — | §8 |
+| 正文对比度 | AA（正文 4.5 / 大字号 3.0） | §8 |
+| 375px 无横向滚动 | `scrollWidth <= innerWidth` | §16 G4 |
+| 键盘焦点可见 | `focus-visible` 有非 `none` 轮廓 | §8 |
+| 文章页 TTFB | < 300ms | §15 / G8 |
+| LCP | < 2.5s | §15 / G8 |
+| 文章页首屏 JS | < 150KB gzip（不含公式） | §15 / G8 |
+
+> **口径**：TTFB 取 `PerformanceNavigationTiming.responseStart`。跑在本机时网络往返≈0，
+> 量到的接近**应用自身**开销；审计线上时才是端到端的用户感知数字。
+> 正文里的 `h1`（作者写 `#`）不计入"页面骨架 h1"：正文标题由作者控制。
+>
+> **未覆盖**：管理端页面（`/admin/*`）需要登录会话，没纳入自动审计——它只有作者一个人用，
+> 且跑在隧道后面。改管理端 UI 时手动过一遍：`/admin`、`/admin/posts/[id]`、`/admin/settings`。
+
+### 22.3 内存实测
+
+```bash
+# Linux / 容器
+docker stats --no-stream zjut-blog
+# 或在容器里：ps -o rss= -C blogd -C node | awk '{s+=$1} END {print s/1024" MB"}'
+```
+
+```powershell
+# Windows 本机（PowerShell）
+Get-Process blogd | Select-Object WorkingSet64
+Get-Process -Id (Get-NetTCPConnection -LocalPort 3000 -State Listen).OwningProcess |
+  Select-Object WorkingSet64
+```
+
+负载：对 `/`、`/posts`、`/posts/<slug>`、`/archive`、`/tags` 与两个 API 各打若干轮，
+取**峰值**与 5 秒后的回落值。
+
+### 22.4 本机基线（2026-10-24，Windows + Edge，仅供对照）
+
+| 指标 | 实测 | 预算（§15 / G8） |
+| --- | --- | --- |
+| 文章页 TTFB（本机回环） | P50 14.4ms / P95 30ms | < 300ms |
+| 首页 TTFB | P50 8.8ms | < 300ms |
+| `/api/search` | P50 0.9ms | < 100ms |
+| 文章页首屏 JS | 131KB gzip | < 150KB |
+| Go（blogd） | 稳态 32.8MB / 峰值 33.8MB | 稳态 120MB / 峰值 380MB；V4 ≤100MB |
+| Next（node） | 稳态 210.8MB / 峰值 270.5MB | 稳态 350MB / 峰值 400MB |
+| 合计峰值 | ~304MB | 容器 1.5GB |
+
+> 平台差异：Windows 的 `WorkingSet64` 与容器里的 `RSS` 不完全等价，上表只作对照；
+> 线上以 `docker stats` 为准。
+
+**已知的坑（D19 修掉）**：公开 API 的 20 r/s 限流原先按 `ClientIP()` 分桶，而**同容器里
+Next 的 SSR 抓取也来自回环**，与访客共用一个桶——每渲染一个页面要发 2–3 次公开 API 调用，
+于是约 10 页/秒就会把 `code 1005` 抛回给页面、整页 500。现在 `middleware.IsInternalCaller`
+（回环 + 无转发头）不参与限流，访客额度不受影响。
+
 

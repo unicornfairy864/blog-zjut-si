@@ -14,6 +14,11 @@ coverage.html
 # Windows PowerShell 5.1 会把 `-coverprofile=coverage.out` 截成 `coverage`，兜底忽略
 /apps/server/coverage
 
+# Playwright（E2E 与可访问性/性能审计的产物）
+/apps/web/test-results/
+/apps/web/playwright-report/
+/apps/web/blob-report/
+
 # 运行时数据
 *.db
 *.db-wal

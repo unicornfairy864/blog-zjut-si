@@ -22,6 +22,8 @@ export interface PingResult {
 export interface PublicMedia {
   sha256: string;
   ext: string;
+  /** 原文件名；作者没填 alt 时作为图片的兜底描述。 */
+  originalName: string;
   width: number;
   height: number;
   alt: string;

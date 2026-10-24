@@ -2,7 +2,7 @@
 
 > 项目：`zjut.si` 个人博客（Go + Next.js + SQLite 单容器）
 > 路径：`docs/agent.md`（仓库根若需要 `AGENTS.md`，放一个只含链接的 3 行索引，不要复制正文；Windows 下不要用软链）
-> 版本：**v1.19**（2026-10-22 公开页排版与品牌统一：正文 h1 样式、标题/正文分割线、导航头像，见 §22）
+> 版本：**v1.20**（2026-10-24 D19 性能与内存实测 + 可访问性 + 全站校对；修掉公开 API 限流把自己 SSR 打成 500 的缺陷，见 §22）
 > 状态：**设计契约**。任何偏离本文档的实现都必须先更新本文档
 > 读者：执行编码的 AI Agent 与项目所有者（验收方）
 > 阅读顺序：§1 硬红线 → §2 拓扑 → §3 结构 → §4 数据模型 → §5 接口 → §7/§8 规范 → §16 验收
@@ -465,7 +465,7 @@ apps/web/
 | 导出 | 只有 Next 约定文件用 default export，其余具名导出 |
 | 错误 | `lib/api/fetcher.ts` 统一抛 `ApiError{code,message,status}`；**按 `code` 分支**（业务失败也是 HTTP 200，`status` 只作诊断）；`error.tsx` 兜底，不暴露堆栈 |
 | 登录态 | `app/(admin)/admin/(protected)/layout.tsx` 先 `GET /auth/me`，`code 1000` 直接跳 `/admin/login`，避免闪烁 |
-| 可访问性 | 语义标签、焦点可见、图片 alt 必填、对比度 AA、`eslint-plugin-jsx-a11y` |
+| 可访问性 | 语义标签、焦点可见、图片 alt 必填、对比度 AA、`eslint-plugin-jsx-a11y`；用 `pnpm test:e2e`（playwright + 系统已装的 Edge，不需要 `playwright install`）审计：页面骨架恰好一个 `h1`（正文标题由作者控制）、图片有 `alt`、链接/按钮有可访问名、控件有标签、有 `<main>`、对比度 AA、375px 无横向滚动。`--muted-foreground` 定在 **45%** 是为了在 `bg-muted` 上也达到 4.5（47% 只有 4.33） |
 | 质量门 | `pnpm lint && pnpm typecheck && pnpm test && pnpm build` 全绿才允许提交 |
 | 禁止 | Server Actions（会绕过 `lib/api`）、组件内拼 API 路径、`app/api` 透传业务数据、AntD/MUI/Redux |
 
@@ -493,7 +493,7 @@ apps/web/
 | EXIF | 入库前按 Orientation 摆正并剥离全部 EXIF（含 GPS），再生成变体 |
 | SQL | 全参数化；FTS5 查询字符串必须转义 |
 | 越权 | 8640 层直接挡掉 `/admin`、`/api/admin`，不依赖登录态判断（`NoRoute` 回 `200 + code 1002`，不泄露路径是否存在） |
-| 限流与锁定 | 登录 5/min（按用户名）；评论 3/10min/IP；公开 API 20 r/s；点赞 10/min/visitor。**登录时先判锁定再判限流**：账号已锁定回 `code 2005`，不能回 `code 1005`（否则用户只会看到"稍后再试"却永远进不去） |
+| 限流与锁定 | 登录 5/min（按用户名）；评论 3/10min/IP；公开 API 20 r/s；点赞 10/min/visitor。**登录时先判锁定再判限流**：账号已锁定回 `code 2005`，不能回 `code 1005`（否则用户只会看到"稍后再试"却永远进不去）。**同容器内的服务端调用不参与限流**（判据：回环来源 + 完全没有转发头，见 `middleware.IsInternalCaller`）——Next 的 SSR 抓取也来自回环，与访客共用这一个桶会让站点在约 10 页/秒时把自己的页面打成 `code 1005` → 整页 500 |
 | 响应头 | `X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy` 最小化 |
 | CSP | `script-src 'self' 'nonce-{n}' 'strict-dynamic'`，nonce 由 `middleware.ts` 注入。**禁止 `unsafe-inline`**，否则 Next RSC 水合会失败；`style-src 'self' 'unsafe-inline'` 可保留（Tailwind 运行时无内联样式，但 shadcn 组件有） |
 | 敏感信息 | `.env` 不入库不入镜；`admin_email` 不在任何公开接口出现 |
@@ -686,7 +686,7 @@ apps/web/
 | G5 互动 | D11–D12 | 评论 3/10min 限流 = 200 + `code 1005`；嵌套 ≤2 层；spam 不进公开列表；点赞幂等；同 visitor 10 分钟内 PV 只 +1；`stats_daily` 按上海时区切日 |
 | G6 发布控制 | D13 | 定时发布到点生效（误差 <90s）；回滚生成新 revision；预览链接 24h 后 = 200 + `code 2006`；`cleanup` 能删掉构造的过期数据 |
 | G7 SEO 与部署 | D15–D16 | `sitemap.xml` 只含已发布（草稿/定时/归档/回收站一律不出现）且 XML 合法；`rss.xml` 可被解析、条目 ≤20 且带 `content:encoded` 全文；每页 JSON-LD 可 `JSON.parse` 且 `@type` 正确；每页恰好一个 `canonical` 且互不相同；`robots.txt` 含 `Sitemap:` 且禁 `/admin`、`/preview`、`/api/`；`docker kill` 与 `pkill -9 blogd` 两种杀法都在 30s 内自愈；隧道可登录（`/admin/login` 出登录页）；nginx 直出静态图片 200 且带 `immutable`、`/admin` 与 `/api/admin` 在公网 404；`certbot renew --dry-run` 通过。逐条命令见 runbook §19 |
-| G8 备份、测试与性能 | D17–D19 | `VACUUM INTO` 可还原；空机恢复演练成功（runbook §21）；`POST /notify/test` 能真实送达（webhook / Telegram 至少一种）；`integrity_check` 任务通过；单测/接口/E2E 全绿；service 覆盖率 ≥70%；TTFB <300ms；LCP <2.5s；内存不超 §15 |
+| G8 备份、测试与性能 | D17–D19 | `VACUUM INTO` 可还原；空机恢复演练成功（runbook §21）；`POST /notify/test` 能真实送达（webhook / Telegram 至少一种）；`integrity_check` 任务通过；单测/接口/E2E 全绿；service 覆盖率 ≥70%；TTFB <300ms；LCP <2.5s；内存不超 §15。**E2E 与性能/可访问性的跑法与基线见 runbook §22** |
 
 **测试要求**：状态机与任务调度必须有单元测试；每个 API 至少一条 happy path + 一条错误路径；禁止提交无测试的状态迁移代码。
 
@@ -724,7 +724,7 @@ apps/web/
 | --- | --- |
 | Go | gin, gorm, glebarez/sqlite, golang-migrate, viper, goldmark(+GFM/attributes), chroma/v2, bluemonday, google/uuid, golang.org/x/crypto(argon2), golang.org/x/sync(errgroup), gen2brain/webp（wazero，构建加 `-tags nodynamic`）, golang.org/x/image(draw), buckket/go-blurhash, golang.org/x/time |
 | Web | next(15.x), react, tailwindcss(3.x), shadcn/ui（含 @radix-ui/*、class-variance-authority、tailwindcss-animate）, lucide-react, swr, zod, react-hook-form(+@hookform/resolvers), date-fns, katex, clsx + tailwind-merge |
-| 测试 | go test + testify；vitest + testing-library；playwright |
+| 测试 | go test + testify；vitest + testing-library；playwright（E2E 与可访问性/性能审计用系统已装的 Edge，`channel: "msedge"`，不需要下载浏览器） |
 
 新增任何运行时依赖必须先在本表登记。
 
@@ -850,6 +850,7 @@ apps/web/
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.20 | 2026-10-24 | **D19 性能与内存实测 + 可访问性 + 全站校对**：① **修掉一处会把整页打成 500 的缺陷**——公开 API 的 20 r/s 限流按 `ClientIP()` 分桶，而同容器里 Next 的 SSR 抓取也来自回环，与访客共用同一个桶；每渲染一个页面要发 2–3 次公开 API 调用，约 10 页/秒就会把 `code 1005` 抛回页面、前端 `apiFetch` 抛出后整页 500（实测连打 30 次有 19–30 次 500）。新增 `middleware.IsInternalCaller`（回环来源 + 完全没有转发头）不参与限流，访客额度不变；带回归用例 `middleware/ratelimit_test.go`。② **可访问性与性能审计落地**：`apps/web/e2e/` 下新增 playwright 审计（`pnpm test:e2e`，用系统已装的 Edge，`channel: "msedge"`，不需要下载浏览器），断言页面骨架恰好一个 `h1`、图片 `alt`、链接/按钮可访问名、控件标签、`<main>` 地标、对比度 AA、375px 无横向滚动、焦点可见，以及 TTFB / LCP / 首屏 JS 体积；跑法与基线记在 runbook §22。TTFB 断言取**服务端段**（`(responseStart-requestStart) - (connectEnd-connectStart)`），审计线上时不会把链路延迟误判成服务端慢。③ 审计发现并修掉：`--muted-foreground` 47%→**45%**（47% 落在 `bg-muted` 上只有 4.33，达不到 AA 的 4.5；白底上反而从 4.70 升到 5.05）、`post-interactions` 的 `aria-label="点赞"` 覆盖了可见文字（读屏听不到数量与状态）、`media-picker` 的零信息量可访问名、封面 `alt` 退到原文件名。④ **全站校对**：错误提示的句末句号统一（去掉 6 处）、媒体引用清单不再把 `cover`/`og`/`content` 原始枚举值塞进中文句子（译成封面 / OG 图 / 正文）、术语与量词统一若干组（转码 / 已归档 / 管理端 / 公开页面 / Canonical URL / 审计日志 / N 篇 / N 条 / 「」引号）、`error.tsx` 把请求 id 显示出来让提示可执行。⑤ 公开 `cover` 增加 `originalName`（`alt` 的兜底来源，纯新增字段），`docs/api.md` 同步。⑥ 本机实测基线：文章页 TTFB P50 14.4ms、首页 8.8ms、`/api/search` 0.9ms、文章页首屏 JS 131KB gzip；Go 稳态 32.8MB / 峰值 33.8MB，Next 稳态 210.8MB / 峰值 270.5MB，合计峰值 ~304MB（容器 1.5GB）——全部在 §15 预算内 |
 | 1.19 | 2026-10-22 | **公开页排版与品牌统一**：① **正文 `h1` 此前没有样式**——Tailwind preflight 把 h1–h6 重置成 `font-size: inherit; font-weight: inherit`，而 `prose.css` 只给了 h2/h3，于是作者写 `# 标题` 渲染出来和普通段落一模一样；补 `.prose-blog h1`（`text-3xl`，比 h2 大一档），正文层级 h1 > h2 > h3 才立得住。② 公开页统一在**标题区下方**加一条分割线（新增 `ui/layout/divider.tsx`，用 `<hr>` 参与父容器 `space-y`，各页疏密一致；`/`、`/posts`、`/archive`、`/tags`、`/tags/{slug}`、`/series`、`/series/{slug}`、`/links`、`/[slug]`、`/search`、`/preview/{token}` 全覆盖），文章页与静态页在**正文下方**再加一条；原先靠 `border-t` 画线的「上下篇」导航与「最后更新」去掉边框，避免两条线并排。③ 品牌：站点描述改为「陈松的个人博客：Web、算法竞赛、嵌入式开发」（`SITE.name` / `SITE.title` 仍是 `zjut.si`）；导航栏改为「头像 + `BLOG.ZJUT.SI`」——头像指向个人主页 `https://www.zjut.si`（**同标签跳转**，它是导航的一部分而不是外链引用），文字指向本站首页；图标素材取自个人主页仓库（`favicon.ico`、`favicon-32/64.png`、`icon-192/512.png`、`apple-touch-icon.png`）。**`favicon.ico` 必须放 `public/`**：放 `app/` 时 Next 会把它当图片资源处理，而这份 ico 内嵌的 PNG 不是 RGBA，`next build` 会以 "Processing image failed / The PNG is not in RGBA format" 失败（开发服务器整站 500）。④ 管理端编辑器把「发布控制（定时发布 / 版本回滚 / 预览链接）」从表单上方移到「分类与展示」下面——`post-publishing.tsx` 的按钮本来就都是 `type="button"`，放进表单不会误提交 |
 | 1.18 | 2026-10-21 | **D18 测试补齐 + 覆盖率门禁，并修掉写测试时挖出的 9 处缺陷**：① 新增 `service` 包测试夹具（`service/main_test.go`：每个用例一套临时库 + 迁移到最新版 + 静默日志，因此用例**串行**执行）与 12 个测试文件（post / content / public / media+storage / publishing+task / ops / comment / stats / auth / audit / notify），**service 语句覆盖率 1.2% → 89.1%**；新增覆盖率门禁 `cmd/covergate`（Go 实现，Windows 与 Linux 同一条命令，不依赖 sh/awk）+ `make test` / `make cover`，`make check` 纳入 Go 单测与前端测试；`nodynamic` 标签贯穿 build / vet / lint / test（不带它时 `gen2brain/webp` 走 dlopen 加载宿主 libwebp，测试结论与线上二进制不一致）；`standards/go.md` §8 从"暂不写"改为正式规范（表驱动、**不写 `t.Parallel()`**、业务错误断言 `errs.As` 的 `Code`、疑似缺陷只记录不顺手改）。② **代码块文件名标签**：围栏 info string 里除语言外写 `title="main.go"`（引号可省）或 `[main.go]`，服务端输出 `<figure class="code-block" data-lang="go"><figcaption>main.go</figcaption>…`，复制按钮由客户端落到标题行；**行号本来就能用**（`prose.css` 的计数器画在 chroma 逐行输出的 `.line::before` 上，本次实证确认）；没写标签时**不包 `figure`**，已有正文的 HTML 逐字节不变。③ 编辑器：修掉从媒体库选图插入 `[object Object]`（`MediaPicker.onPick` 从"回传 Markdown 字符串"改成"回传 `MediaItem`"后漏改调用点）；拖拽/粘贴上传改为**轮询到 `ready` 才写入正文**（`processing` 时的 `url` 只是预测地址，转码失败就是死链），超时/失败都提示去媒体库确认而不是静默插死链；新增 `mediaMarkdown()` 统一拼图片语法并清掉会截断链接的方括号与换行。④ 写测试时挖出并修掉的 9 处缺陷：**登录锁定在窗口过期后永远不再触发**（窗口重置走 `CreateLoginAttempt`，撞 `(key,kind)` 唯一索引导致整笔回滚 → 计数既不重置也不累加，暴力破解在第一个窗口之后失去保护）；`Schedule` 放行 `published → scheduled`（文章从公开端撤下且原发布时间被改写，现在返回 1004）；`Publish`/`Unpublish`/`Schedule`/`RestoreRevision` 对"文章不存在"返回 1006 而非 1002；`UpdateAttachment` 允许把外链附件清成"既无外链地址也无本地文件"的空壳；空操作 `PATCH /posts/{id}` 的响应形状与正常路径不一致（`tagIds` 是 `null` 而非 `[]`）；`HandleLinkCheck` 在正文已无外链时跳过替换，旧坏链记录永久残留在任务页；`toMediaItem` 缺 1600 档时按 map 遍历顺序取主图，同一份数据每次请求返回不同 URL（改为固定优先级 1600→2400→960→480）；`settings.notify_state` 为 JSON `null` 时 `dispatch` 往 nil map 赋值 panic（巡检在 errgroup goroutine 里跑，会拖垮进程）；`referrer_host` 不做小写归一（同一来源被算成两份） |
 | 1.17 | 2026-10-21 | **D20 功能可用性修复（编辑页分类/展示 + 全站排查）**：① 文章标签与系列此前**只有后端支持**——`post_tags` 只被删除、从未被写入，编辑器也没有任何入口，导致标签/系列的真实功能不可用（公开标签云、标签页、系列页、相关文章恒为空）。现在：`POST|PUT|PATCH /posts` 新增 `tagIds`（替换式、≤20、id 必须存在），新增/更新在同一事务里写 `post_tags`，`seriesId` 补存在性校验；管理端详情回显 `tagIds` + `cover`/`ogImage`，列表项回显 `tags`/`seriesName`；编辑器补齐**标签多选、系列下拉（含系列内序号）、封面/OG 图选择、置顶、允许评论、lang** 六类控件。② 编辑器预览改走 `DecorateContent`（预览 = 发布结果的 G2 断言此前不成立）；静态页正文同样补 srcset 与原图链接；`DecorateContent` 的匹配前缀改为跟着 `img_base_url` 走（不再硬编码 `uploads/`）。③ 存储页「清理孤儿」此前只删概览里截断的 200 条，界面却写"按全量处理"——cleanup 改为全量扫描。④ 点赞限流两个方向共用同一个桶（此前各建一个 = 实际 20 次/分钟，与 10 次/分钟的契约不符）。⑤ 前端对齐：`imgBaseUrl`≤200、友链 name≤100/description≤200、跳转 `toPath` 前缀校验、附件 fileName≤200/version≤50/sort≤99999；设置页只提交真正改动的字段（只调告警不再顶掉 `content_version`）；表单错误统一渲染 `data` 里的字段错误数组（`describeApiError`）；会话过期（`code 1000`）自动回登录页；管理端首页接上 `GET /stats/overview`（此前是纯静态占位页）；CSP `img-src` 放开 `https:`（友链头像与跨源 `imgBaseUrl`）；预览链接失效改按 `code 2006` 判定；评论页「来自《标题》」指向公网站点；非文章页补 PV 打点（"全站 PV/UV"此前只统计文章页） |

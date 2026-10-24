@@ -129,7 +129,7 @@ func (MediaApi) Retry(c *gin.Context) {
 		response.FailWithError(c, err)
 		return
 	}
-	response.OkWithDetailed(c, item, "已重新处理")
+	response.OkWithDetailed(c, item, "已重新转码")
 }
 
 // RemoveOriginal 处理 DELETE /api/admin/media/{id}/original：只删原图，保留四档变体（§10）。

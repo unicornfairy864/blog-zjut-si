@@ -434,15 +434,16 @@ func FindAdjacentPublishedPosts(db *gorm.DB, post *Post) (prev, next *Post, err 
 //
 // 没有封面时整个字段为 null；变体未生成时 variants 为空对象、url 给出 1600 的预期地址。
 type PublicCover struct {
-	SHA256   string            `json:"sha256"`
-	Ext      string            `json:"ext"`
-	Width    int               `json:"width"`
-	Height   int               `json:"height"`
-	Alt      string            `json:"alt"`
-	Blurhash string            `json:"blurhash"`
-	URL      string            `json:"url"`
-	OrigURL  string            `json:"origUrl"`
-	Variants map[string]string `json:"variants"`
+	SHA256       string            `json:"sha256"`
+	Ext          string            `json:"ext"`
+	OriginalName string            `json:"originalName"`
+	Width        int               `json:"width"`
+	Height       int               `json:"height"`
+	Alt          string            `json:"alt"`
+	Blurhash     string            `json:"blurhash"`
+	URL          string            `json:"url"`
+	OrigURL      string            `json:"origUrl"`
+	Variants     map[string]string `json:"variants"`
 }
 
 // PostNeighbor 是详情里的上一篇 / 下一篇引用（§11）。

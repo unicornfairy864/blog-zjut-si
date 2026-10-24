@@ -432,15 +432,16 @@ func toPublicCover(media *model.Media, base string) *model.PublicCover {
 	}
 	item := toMediaItem(media, base)
 	return &model.PublicCover{
-		SHA256:   item.SHA256,
-		Ext:      item.Ext,
-		Width:    item.Width,
-		Height:   item.Height,
-		Alt:      item.Alt,
-		Blurhash: item.Blurhash,
-		URL:      item.URL,
-		OrigURL:  item.OrigURL,
-		Variants: item.Variants,
+		SHA256:       item.SHA256,
+		Ext:          item.Ext,
+		OriginalName: item.OriginalName,
+		Width:        item.Width,
+		Height:       item.Height,
+		Alt:          item.Alt,
+		Blurhash:     item.Blurhash,
+		URL:          item.URL,
+		OrigURL:      item.OrigURL,
+		Variants:     item.Variants,
 	}
 }
 

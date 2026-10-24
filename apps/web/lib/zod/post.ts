@@ -28,10 +28,10 @@ export const postEditorSchema = z.object({
   canonicalUrl: z
     .string()
     .trim()
-    .max(500, "canonical 不能超过 500 个字符")
+    .max(500, "Canonical URL 不能超过 500 个字符")
     .refine(
       (value) => value === "" || /^https?:\/\/\S+$/.test(value),
-      "canonical 必须是 http(s) 链接",
+      "Canonical URL 必须是 http(s) 链接",
     ),
   tagIds: z.array(z.number().int().positive()).max(20, "一篇文章最多 20 个标签"),
   seriesId: z.number().int().positive().nullable(),

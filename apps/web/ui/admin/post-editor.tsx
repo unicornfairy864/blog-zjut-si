@@ -280,7 +280,7 @@ export function PostEditor({ postId }: { postId: number | null }) {
     const valid = await trigger();
     if (!valid) {
       if (!options.silent) {
-        setSaveError("请先补全标题等必填项。");
+        setSaveError("请先补全标题等必填项");
       }
       return null;
     }
@@ -356,7 +356,7 @@ export function PostEditor({ postId }: { postId: number | null }) {
       return;
     }
     if (current.length >= 20) {
-      setSaveError("一篇文章最多 20 个标签。");
+      setSaveError("一篇文章最多 20 个标签");
       return;
     }
     setValue("tagIds", [...current, tagId], { shouldDirty: true });
@@ -789,7 +789,7 @@ export function PostEditor({ postId }: { postId: number | null }) {
             <div className="flex items-center justify-between gap-4">
               <Label htmlFor={CONTENT_TEXTAREA_ID}>正文（Markdown）</Label>
               <span className="text-xs text-muted-foreground">
-                {values.contentMd.length} 字符
+                {values.contentMd.length} Markdown 字符
               </span>
             </div>
             <EditorToolbar
