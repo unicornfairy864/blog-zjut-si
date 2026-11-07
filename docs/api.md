@@ -373,6 +373,10 @@ PV 打点。请求体：
   否则 `200 + code 1003`，`data` 为 `[{field:"tagIds",message:…}]`。
 - `seriesId` 传 `0` 表示清空（置 NULL）；指向不存在的系列 → `200 + code 1003`（`data` 带 `seriesId`）。
   `seriesOrder` 是系列内排序，`≥0`。
+- `coverMediaId` / `ogMediaId` / `seriesId` 的 `0`（与负数）一律当"未设置"落 NULL，**`POST`（新建）与
+  `PATCH`/`PUT` 同口径**；没有系列时 `seriesOrder` 归零。前端的"未设置"就是这个 `0`（`null` 会被
+  序列化成 `0`），所以不要把 `0` 理解成"指向 id 0"。库里历史遗留的 `0`（`Create` 早先没归一的产物）
+  已由迁移 `000004_normalize_zero_fks` 清掉。
 - 详情（`GET /posts/{id}`）回显 `tagIds`（`[]` 表示没有标签）与 `cover` / `ogImage`
   （`{id,url,alt,width,height}`，编辑器显示已选封面用；外键指向的图已被删除时为 `null`）；
   列表项回显 `tags[{name,slug}]` 与 `seriesName`。

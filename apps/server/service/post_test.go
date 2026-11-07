@@ -287,6 +287,57 @@ func TestPostService_CreateRejectsUnknownSeries(t *testing.T) {
 	assert.EqualValues(t, 0, countRows(t, "posts", ""))
 }
 
+// Create 的"0 = 未设置"归一：接口层的 0 必须与 Update 一样落成 NULL（§5）。
+//
+// 缺陷背景（D19 线上实测）：Create 早先只对 seriesId 做存在性校验、没做归一，于是
+// ① `seriesId: 0` 直接回 1003「系列不存在」——编辑器每次新建都保存不了；
+// ② `coverMediaId: 0` 把 0 写进 cover_media_id，而那篇文章此后再也保存不了：
+// 前端 schema 只接受正整数 id，校验拦在发请求之前，用户只看到"请先补全标题等必填项"。
+func TestPostService_CreateNormalizesZeroIDsToNull(t *testing.T) {
+	setupEnv(t)
+	actor := testActor(t)
+	svc := PostService{}
+
+	post, err := svc.Create(PostCreateInput{
+		Title:        "未设置的外键",
+		ContentMD:    "正文",
+		CoverMediaID: ptrInt64(0),
+		OGMediaID:    ptrInt64(-1),
+		SeriesID:     ptrInt64(0),
+		SeriesOrder:  4,
+	}, actor)
+	require.NoError(t, err)
+
+	stored := findPostOrFail(t, post.ID)
+	assert.Nil(t, stored.CoverMediaID, "0 表示未设置，必须落 NULL")
+	assert.Nil(t, stored.OGMediaID)
+	assert.Nil(t, stored.SeriesID)
+	assert.Equal(t, 0, stored.SeriesOrder, "没有系列时序号跟着归零（与 DeleteSeries 同口径）")
+
+	// 有效 id 不能被归一吃掉。
+	sha := strings.Repeat("a", 64)
+	media := insertMediaRow(t, sha, "aa/"+sha, "webp")
+	series := insertSeries(t, "系列", "series-nonzero")
+	post, err = svc.Create(PostCreateInput{
+		Title:        "设置了外键",
+		ContentMD:    "正文",
+		CoverMediaID: &media.ID,
+		OGMediaID:    &media.ID,
+		SeriesID:     &series.ID,
+		SeriesOrder:  4,
+	}, actor)
+	require.NoError(t, err)
+
+	stored = findPostOrFail(t, post.ID)
+	require.NotNil(t, stored.CoverMediaID)
+	assert.Equal(t, media.ID, *stored.CoverMediaID)
+	require.NotNil(t, stored.OGMediaID)
+	assert.Equal(t, media.ID, *stored.OGMediaID)
+	require.NotNil(t, stored.SeriesID)
+	assert.Equal(t, series.ID, *stored.SeriesID)
+	assert.Equal(t, 4, stored.SeriesOrder)
+}
+
 func TestPostService_CreateCanonicalURLAndExcerpt(t *testing.T) {
 	setupEnv(t)
 	actor := testActor(t)

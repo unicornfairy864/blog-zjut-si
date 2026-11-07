@@ -69,6 +69,8 @@ ssh -N -D 1080 user@your-host
 ```
 
 - 浏览器请固定用 `http://localhost:8641`。`localhost` 与 `127.0.0.1` 在 cookie 作用域上是两个 host，混用会表现为"刚登录又回到登录页"。
+- **隧道开着的时候，宿主的 `127.0.0.1:8641` 就是线上**（哪怕本机另起了一个 Go 进程）。做本机验证
+  要想清楚这一点，见 §22.6。
 - 登录页地址是 `/admin/login`；未登录访问 `/admin` 会先请求 `GET /api/admin/auth/me`，
   拿到 `code 1000`（HTTP 200）后跳回登录页。
 
@@ -196,6 +198,8 @@ sqlite3 /data/blog/db/blog.db 'PRAGMA integrity_check;'
 | 容器启动即退出，日志 `加载配置失败` + `创建上传/附件目录失败: mkdir ./data: permission denied` | 数据目录没建或属主不是 1000：`sudo mkdir -p /data/blog/{db,uploads,files,backup} && sudo chown -R 1000:1000 /data/blog`；确认 compose 的 `BLOG_*_DIR` 都是 `/data/blog/...` 绝对路径 |
 | 容器起来了但 `backup` 任务失败，日志 `创建备份目录失败` | 备份目录只在任务执行时创建，不影响启动：`sudo mkdir -p /data/blog/backup && sudo chown 1000:1000 /data/blog/backup` |
 | `readyz` 503 | 看 `checks` 数组里哪一项 false：磁盘满 / uploads 不可写 / 队列积压 |
+| **写操作普遍 `code 1006`，读操作（列表、详情）一切正常** | **先看 `/readyz`**：`curl -s http://127.0.0.1:8641/readyz`（HTTP 状态是 503 时 `-s` 照样打 body）。`uploads` 项 `ok:false` 就是"上传图片 1006"的直接原因——`Upload` 在 `{uploads}/.tmp` 建临时文件失败，整条请求 500→1006；`disk` 项 ≥85%（或磁盘真的写满）则**所有**写操作都会失败，包括 SQLite 的 WAL，而读操作完全不受影响。两种情况下容器都是 `unhealthy`，但页面照常打开，**别只看页面打不打得开**。修法与复查见 §11.1 与 §22.5 |
+| 管理端"保存"一直失败，但提示和实际字段对不上（例如标题明明填了，却报"请先补全标题等必填项"） | 表单校验**在发请求之前**就拦下了，服务端日志里不会有这条请求。v1.22 起编辑器会把校验器原文显示出来；若是历史脏数据（`cover_media_id = 0` 之类），已由迁移 `000004_normalize_zero_fks` 归一，升级后 `schema_migrations` 应为 **4** |
 | 容器状态是 `unhealthy` 但进程还在 | `docker inspect --format '{{json .State.Health}}' zjut-blog`，看最后一次 `readyz` 的失败项。unhealthy **不会**自动重启容器，见 §19 第 9 步 |
 | 公网 `/uploads/xx.webp` 返回 403 | 目录缺 `x` 权限（www-data 走不进去）：重跑 §11.1 的 `setfacl`；返回 404 才是路径写错 |
 | 公网返回 502 | nginx 连不上 8640：`docker compose ps` 看容器是否在跑、`ss -lntp \| grep 8640` 看端口是否只绑在回环 |
@@ -263,6 +267,25 @@ sudo setfacl -R -d -m u:www-data:rX /data/blog/uploads
 - `-d` 是默认 ACL，之后新建的子目录自动继承；不加就得每次新增都重跑一遍。
 - 判据：`403` 是目录缺 `x` 位、nginx 穿不过去（连不存在的文件也 403）；`404` 才是路径/文件名写错。
 - 没有 acl 支持时退而求其次：`sudo chmod -R a+rX /data/blog/uploads`。
+- **`/readyz` 报"上传目录不可写"时按这个顺序查**（容器以 uid 1000 跑，所有目录都得归它）：
+
+  ```bash
+  curl -s http://127.0.0.1:8641/readyz          # uploads 项必须是 ok:true
+  docker compose exec blog id                   # uid=1000 才符合预期
+  sudo ls -ld /data/blog /data/blog/uploads /data/blog/db
+  sudo -u '#1000' touch /data/blog/uploads/.probe && echo 可写 && sudo rm -f /data/blog/uploads/.probe
+  df -h /data                                   # 磁盘满/只读挂载同样会让这里失败
+  ```
+
+  属主不对（`docker cp`、`sudo` 手工建过文件、恢复备份用 root 解压都会造成）就整树改回来：
+
+  ```bash
+  sudo chown -R 1000:1000 /data/blog
+  sudo find /data/blog -type d -exec chmod 750 {} +   # acl 见上两条 setfacl
+  curl -s http://127.0.0.1:8641/readyz                # 期望 uploads ok:true，且容器转 healthy
+  ```
+
+- 权限改完**不用重启容器**：`readyz` 每次都是现探的；compose 的 healthcheck 下一轮就会转 `healthy`。
 - 验证：
 
   ```bash
@@ -685,6 +708,17 @@ curl -s -X PUT ... -d '{"siteTimezone":"Mars/Olympus"}'    # code 1003（HTTP 20
 # 7) 代码块文件名标签（§11）：围栏的 info string 里除语言外写 title="main.go"（或 [main.go]）
 #    期望：代码块上方多出一行文件名，复制按钮落在这一行；行号仍从 1 起
 #    没写标签的代码块不出标题栏，行号照旧（老正文的 HTML 逐字节不变）
+
+# 8) 编辑器保存草稿（v1.22）：**必须在浏览器里点一次**，接口层的 curl 测不出这条链路
+#    （保存请求此前是被前端校验拦下的，服务端日志里根本没有这次请求）
+#    a. 打开 /admin/posts/<id>，改一处标题，点「保存草稿」→ 提示应变成「已保存 时:分:秒」
+#    b. F12 → Network：应当看到 PATCH /api/admin/posts/<id> → 200 + code 0（看不到请求 = 又被前端拦下了）
+#    c. 新建文章（/admin/posts/new）填标题就保存：不选系列/封面也应成功，回列表能看到这篇草稿
+#    d. 接口等价写法（seriesId/coverMediaId/ogMediaId 的 0 都表示"未设置"，1003 说明又没归一对）：
+curl -s -X POST http://127.0.0.1:8641/api/admin/posts -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $CSRF" \
+  -d '{"title":"新建草稿自测","contentMd":"正文\n","seriesId":0,"seriesOrder":4,"coverMediaId":0,"ogMediaId":0}' \
+  | grep -o '"code":[0-9-]*'      # 期望 0，且返回的 coverMediaId / ogMediaId 是 null、seriesOrder 为 0
 ```
 
 - `/admin/audit-logs` 应能看到上面每一步的动作（`tag.create`、`redirect.create`、`attachment.upload`、`settings.update`…）。
@@ -1074,9 +1108,9 @@ curl -s http://127.0.0.1:8641/readyz | jq
 两个进程都要在：Go 负责 API 与边缘，Next 负责页面。
 
 ```bash
-# 1) Go（默认 :8640 公开 / :8641 管理），指向一个临时库
+# 1) Go（本机用 18640/18641：宿主常年挂着 8641 的管理端隧道，见 §22.6），指向一个临时库
 cd apps/server
-BLOG_SERVER_PUBLIC=:8640 BLOG_SERVER_ADMIN=:8641 \
+BLOG_SERVER_PUBLIC=127.0.0.1:18640 BLOG_SERVER_ADMIN=127.0.0.1:18641 \
 BLOG_DB_PATH=/tmp/perf/blog.db BLOG_UPLOAD_DIR=/tmp/perf/uploads \
 BLOG_FILE_DIR=/tmp/perf/files BLOG_BACKUP_DIR=/tmp/perf/backup \
 BLOG_ADMIN_USERNAME=verify BLOG_ADMIN_PASSWORD=verify-password-0123456789 \
@@ -1096,20 +1130,20 @@ cd apps/web && NEXT_DISABLE_STANDALONE=1 pnpm build && pnpm start
 ```bash
 CSRF=$(curl -s -c /tmp/c.txt -H 'Content-Type: application/json' \
   -d '{"username":"verify","password":"verify-password-0123456789"}' \
-  http://127.0.0.1:8641/api/admin/auth/login >/dev/null && \
-  curl -s -b /tmp/c.txt http://127.0.0.1:8641/api/admin/auth/me | jq -r .data.csrfToken)
+  http://127.0.0.1:18641/api/admin/auth/login >/dev/null && \
+  curl -s -b /tmp/c.txt http://127.0.0.1:18641/api/admin/auth/me | jq -r .data.csrfToken)
 curl -s -b /tmp/c.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
   -d '{"title":"性能验证","slug":"perf-verify","contentMd":"# 标题\n\n正文\n","excerpt":""}' \
-  http://127.0.0.1:8641/api/admin/posts | jq -r .data.id
+  http://127.0.0.1:18641/api/admin/posts | jq -r .data.id
 curl -s -b /tmp/c.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-  -d '{}' http://127.0.0.1:8641/api/admin/posts/1/publish | jq -r .code
+  -d '{}' http://127.0.0.1:18641/api/admin/posts/1/publish | jq -r .code
 ```
 
 ### 22.2 可访问性与性能断言（playwright）
 
 ```bash
 cd apps/web
-E2E_BASE_URL=http://127.0.0.1:8640 pnpm test:e2e     # 本机
+E2E_BASE_URL=http://127.0.0.1:18640 pnpm test:e2e     # 本机
 E2E_BASE_URL=https://blog.zjut.si pnpm test:e2e      # 直接审计线上
 ```
 
@@ -1171,5 +1205,47 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000 -State Listen).OwningProce
 Next 的 SSR 抓取也来自回环**，与访客共用一个桶——每渲染一个页面要发 2–3 次公开 API 调用，
 于是约 10 页/秒就会把 `code 1005` 抛回给页面、整页 500。现在 `middleware.IsInternalCaller`
 （回环 + 无转发头）不参与限流，访客额度不受影响。
+
+### 22.5 线上"保存类操作必失败"怎么查（2026-11-07 实测）
+
+两个症状都真实发生过，而且**都不在这两个接口的代码里**。先按这张表分流，别急着翻代码：
+
+| 症状 | 一句话判据 | 处置 |
+| --- | --- | --- |
+| 媒体库上传图片 → `{"code":1006}` | `curl -s http://127.0.0.1:8641/readyz` 的 `uploads` 项 `ok:false`（"上传目录不可写"） | 部署侧权限问题，按 §11.1 的顺序修 |
+| 编辑器保存草稿 → 提示"请先补全标题等必填项" | 这条提示来自**前端校验**，服务端日志里根本没有这次请求 | v1.22 起提示会显示真实原因；若是 `cover_media_id = 0` 之类的历史脏数据，升级到迁移 4 即被归一 |
+
+两条经验：
+
+- **`1006` 现在会带原因进日志了**（v1.22 起）：`docker compose logs blog | grep 请求处理失败`
+  能直接看到根因与 `request_id`，再拿 `request_id` 去比对访问日志那一行。之前这一层什么都不记，
+  200 + `1006` 信封是唯一线索，只能靠猜。
+- **读写分流是重要线索**：读全好、写全坏，基本就是"磁盘满 / 挂载只读 / 目录不可写"这一族，
+  而不是业务代码；SQLite 的写事务与 WAL 落盘都依赖目录可写，而 WAL 模式下读完全不受影响。
+
+### 22.6 本机验证的坑：SSH 隧道会劫持 `127.0.0.1:8641`
+
+宿主机上常年挂着管理端隧道（§3）：
+
+```bash
+ssh -N -L 8641:127.0.0.1:8641 root@<公网 IP>
+```
+
+于是**本机**的 `127.0.0.1:8641` 归隧道所有——Windows 按"最具体匹配优先"，
+Go 绑 `:8641`（`::8641` 全网卡）也抢不走 `127.0.0.1` 上的那条。后果是"本机验证"的每个请求
+都打到了**线上**（能读能写，而且用的是线上的数据）。自查与规避：
+
+```powershell
+Get-NetTCPConnection -State Listen -LocalPort 8641 | Select-Object LocalAddress,OwningProcess
+# OwningProcess 是 ssh.exe ⇒ 这个端口通向线上，别拿它做本地验证
+```
+
+- 按 §22.1 起本机栈时，**端口换成 18640/18641 并把地址写死**：
+  `BLOG_SERVER_PUBLIC=127.0.0.1:18640 BLOG_SERVER_ADMIN=127.0.0.1:18641`。
+- 管理端页面（Next）也要指到本机的 Go：`E2E_BASE_URL=http://127.0.0.1:18640`。
+- 起完先确认端口归属：`curl -s http://127.0.0.1:18641/healthz`（本机栈活着就一定有响应）；
+  若一定要用 8641，先跑上面的 `Get-NetTCPConnection`（Windows）或 `ss -lntp | grep 8641`（服务器），
+  属主是 `ssh` 就别拿它做本地验证。
+
 
 

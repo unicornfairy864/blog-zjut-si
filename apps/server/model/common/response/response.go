@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/unicornfairy864/blog-zjut-si/apps/server/global"
 	"github.com/unicornfairy864/blog-zjut-si/apps/server/model/common/errs"
 )
 
@@ -117,7 +118,20 @@ func FailWithDetailed(c *gin.Context, code int, data any, msg string) {
 }
 
 // FailWithError 归一化错误并输出；非 AppError 一律 code 1006（HTTP 200）。
+//
+// 1006 表示"没预料到"，必须留下带原因的一行日志：否则线上只剩一个 200 信封，
+// 日志里连线索都没有——排障时只能靠猜（业务错误 1000/1002/… 是预期内的结果，不记，免得刷屏）。
 func FailWithError(c *gin.Context, err error) {
 	appErr := errs.Translate(err)
+	if appErr.Code == errs.ErrorInternal && global.Log != nil {
+		// 请求 id 从响应头回读：RequestID 中间件在 handler 之前就写好了它，
+		// 而 middleware 包依赖 response 包，这里不能反向 import（会成环）。
+		global.Log.Error("请求处理失败",
+			"request_id", c.Writer.Header().Get("X-Request-Id"),
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"err", err,
+		)
+	}
 	FailWithDetailed(c, appErr.Code, appErr.Details, appErr.Message)
 }

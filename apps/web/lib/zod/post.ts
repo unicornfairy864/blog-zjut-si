@@ -4,8 +4,8 @@ import { z } from "zod";
  * 文章编辑器 schema；约束与服务端 binding 保持一致（agent.md §8）。
  *
  * slug 留空表示由服务端生成；canonical 允许留空，填写时必须是 http(s) 链接。
- * 分类字段（tagIds/seriesId/seriesOrder）与展示开关（isPinned/allowComments）在 D20 补齐：
- * 此前这些字段只有后端支持，编辑器没有入口，表现是"标签建了也挂不上、封面永远为空"。
+ * 外键字段（seriesId / coverMediaId / ogMediaId）的 `0` 表示"清空/未设置"（§5），
+ * 所以它们只要求非负：用 positive() 会把历史脏数据变成"永远存不了"。
  */
 export const postEditorSchema = z.object({
   title: z
@@ -34,14 +34,17 @@ export const postEditorSchema = z.object({
       "Canonical URL 必须是 http(s) 链接",
     ),
   tagIds: z.array(z.number().int().positive()).max(20, "一篇文章最多 20 个标签"),
-  seriesId: z.number().int().positive().nullable(),
+  // 三个外键都允许 0：契约里 0 就是"清空/未设置"（agent.md §5），服务端把它落成 NULL。
+  // 不能用 positive()——历史数据里真的存过 0（D19 的 cover_media_id = 0），
+  // 那样整张表单会一直校验不通过，保存请求根本发不出去（见 post-form.ts 的 idOrNull）。
+  seriesId: z.number().int().nonnegative().nullable(),
   seriesOrder: z
     .number({ message: "请填 0 或正整数" })
     .int("请填整数")
     .min(0, "不能是负数")
     .max(99999, "最多 99999"),
-  coverMediaId: z.number().int().positive().nullable(),
-  ogMediaId: z.number().int().positive().nullable(),
+  coverMediaId: z.number().int().nonnegative().nullable(),
+  ogMediaId: z.number().int().nonnegative().nullable(),
   isPinned: z.boolean(),
   allowComments: z.boolean(),
   lang: z.string().trim().max(20, "语言标签不能超过 20 个字符"),

@@ -145,6 +145,21 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 		return nil, err
 	}
 
+	// "未设置"在接口层一律是 0（编辑器把 null 写成 `?? 0`），契约里 0 = 清空/置 NULL。
+	//
+	// 早先只有 Update 做了这层归一，Create 把 0 当成真外键用：seriesId=0 直接回
+	// 1003「系列不存在」（编辑器每次新建都踩），coverMediaId=0 则把 0 写进库——
+	// 而那篇草稿此后在编辑器里再也保存不了（前端 schema 只接受正整数 id，
+	// 校验拦在发请求之前，用户看到的是"请先补全标题等必填项"）。两个写入口现在一致。
+	coverMediaID := clearableIDPtr(in.CoverMediaID)
+	ogMediaID := clearableIDPtr(in.OGMediaID)
+	seriesID := clearableIDPtr(in.SeriesID)
+	seriesOrder := in.SeriesOrder
+	if seriesID == nil {
+		// 没有系列的序号没有意义，与 DeleteSeries 的口径一致。
+		seriesOrder = 0
+	}
+
 	post := &model.Post{
 		Slug:           slug,
 		Title:          title,
@@ -152,7 +167,7 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 		ContentMD:      in.ContentMD,
 		ContentHTML:    rendered.HTML,
 		ContentText:    rendered.Text,
-		CoverMediaID:   in.CoverMediaID,
+		CoverMediaID:   coverMediaID,
 		Status:         model.PostStatusDraft,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -160,12 +175,12 @@ func (s PostService) Create(in PostCreateInput, actor PostActor) (*model.Post, e
 		ReadingTime:    rendered.ReadingTime,
 		IsPinned:       in.IsPinned,
 		AllowComments:  in.AllowComments,
-		SeriesID:       in.SeriesID,
-		SeriesOrder:    in.SeriesOrder,
+		SeriesID:       seriesID,
+		SeriesOrder:    seriesOrder,
 		SEOTitle:       strings.TrimSpace(in.SEOTitle),
 		SEODescription: strings.TrimSpace(in.SEODescription),
 		CanonicalURL:   strings.TrimSpace(in.CanonicalURL),
-		OGMediaID:      in.OGMediaID,
+		OGMediaID:      ogMediaID,
 		Revision:       1,
 		Lang:           lang,
 	}
@@ -825,6 +840,17 @@ func clearableID(id int64) *int64 {
 		return nil
 	}
 	return &id
+}
+
+// clearableIDPtr 是 clearableID 的指针版：nil、0 与负数都表示"未设置"。
+//
+// 接口层的"未设置"是 0（见 PostUpdateInput 的约定），新建与更新都要过这里，
+// 否则同一份入参会在两个写入口得到两种结果。
+func clearableIDPtr(id *int64) *int64 {
+	if id == nil {
+		return nil
+	}
+	return clearableID(*id)
 }
 
 // normalizeTagIDs 归一化标签 id：丢掉非正数、去重，并保留调用方给的顺序。

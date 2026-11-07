@@ -13,7 +13,6 @@ import {
   adminPostApi,
   type PostDetail,
   type PostPreview,
-  type PostWriteInput,
 } from "@/lib/api/posts";
 import { adminTaxonomyApi, type AdminSeries, type AdminTag } from "@/lib/api/taxonomy";
 import { swrKeys } from "@/lib/swr/keys";
@@ -27,6 +26,12 @@ import {
 } from "@/ui/admin/editor-toolbar";
 import { FieldSelect } from "@/ui/admin/field-select";
 import { MediaPicker } from "@/ui/admin/media-picker";
+import {
+  EMPTY_VALUES,
+  firstFieldError,
+  toFormValues,
+  toWriteInput,
+} from "@/ui/admin/post-form";
 import { PostPreviewPane } from "@/ui/admin/post-preview";
 import { PostPublishing } from "@/ui/admin/post-publishing";
 import { Alert, AlertDescription } from "@/ui/shadcn/alert";
@@ -35,24 +40,6 @@ import { Input } from "@/ui/shadcn/input";
 import { Label } from "@/ui/shadcn/label";
 import { Textarea } from "@/ui/shadcn/textarea";
 import { Loading } from "@/ui/shared/loading";
-
-const EMPTY_VALUES: PostEditorValues = {
-  title: "",
-  slug: "",
-  contentMd: "",
-  excerpt: "",
-  seoTitle: "",
-  seoDescription: "",
-  canonicalUrl: "",
-  tagIds: [],
-  seriesId: null,
-  seriesOrder: 0,
-  coverMediaId: null,
-  ogMediaId: null,
-  isPinned: false,
-  allowComments: true,
-  lang: "",
-};
 
 /** 自动保存的防抖间隔（agent.md §8：30s 或失焦）。 */
 const AUTOSAVE_DELAY_MS = 30_000;
@@ -64,54 +51,6 @@ const CONTENT_TEXTAREA_ID = "post-content";
 /** 正文 textarea 的 DOM 引用；插入语法与拖拽上传都依赖它的光标位置。 */
 function contentTextarea(): HTMLTextAreaElement | null {
   return document.getElementById(CONTENT_TEXTAREA_ID) as HTMLTextAreaElement | null;
-}
-
-/** 实体 → 表单值。 */
-function toFormValues(post: PostDetail): PostEditorValues {
-  return {
-    title: post.title,
-    slug: post.slug,
-    contentMd: post.contentMd,
-    excerpt: post.excerpt,
-    seoTitle: post.seoTitle,
-    seoDescription: post.seoDescription,
-    canonicalUrl: post.canonicalUrl,
-    tagIds: post.tagIds ?? [],
-    seriesId: post.seriesId,
-    seriesOrder: post.seriesOrder,
-    coverMediaId: post.coverMediaId,
-    ogMediaId: post.ogMediaId,
-    isPinned: post.isPinned,
-    allowComments: post.allowComments,
-    lang: post.lang,
-  };
-}
-
-/** 表单值 → 接口入参；slug 为空时不传，交给服务端生成。 */
-function toWriteInput(
-  values: PostEditorValues,
-  createRedirect: boolean,
-): PostWriteInput {
-  const slug = values.slug.trim();
-  return {
-    title: values.title.trim(),
-    contentMd: values.contentMd,
-    excerpt: values.excerpt.trim(),
-    ...(slug ? { slug } : {}),
-    seoTitle: values.seoTitle.trim(),
-    seoDescription: values.seoDescription.trim(),
-    canonicalUrl: values.canonicalUrl.trim(),
-    createRedirect,
-    // 分类与展示字段：这些此前只有后端支持，编辑器没有入口（D20 补齐）。
-    tagIds: values.tagIds,
-    seriesId: values.seriesId ?? 0,
-    seriesOrder: values.seriesOrder,
-    coverMediaId: values.coverMediaId ?? 0,
-    ogMediaId: values.ogMediaId ?? 0,
-    isPinned: values.isPinned,
-    allowComments: values.allowComments,
-    lang: values.lang.trim(),
-  };
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -280,7 +219,9 @@ export function PostEditor({ postId }: { postId: number | null }) {
     const valid = await trigger();
     if (!valid) {
       if (!options.silent) {
-        setSaveError("请先补全标题等必填项");
+        // 校验器的原文比笼统的兜底更有用：以前无论哪个字段没过都报"请先补全标题
+        // 等必填项"，标题没问题时这条提示等于把人带偏。
+        setSaveError(firstFieldError(formState.errors) ?? "请先补全标题等必填项");
       }
       return null;
     }
